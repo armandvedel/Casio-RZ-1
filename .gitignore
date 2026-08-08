@@ -3,6 +3,9 @@ build/
 build_vst/
 build_test/
 cmake-build-*/
+test-scripts/
+test-output/
+mame-mac-master/mame
 cfg/
 nvram/
 snap/

@@ -45,6 +45,10 @@ public:
 	void data_w(u8 data) { write(1, data); }
 	u8 data_r() { return read(1); }
 
+	// read one character of display data RAM (diagnostics; inline so callers
+	// don't need a rebuilt libemu)
+	uint8_t display_char(u8 pos) const { return m_ddram[pos & 0x7f]; }
+
 	u8 db_r();
 	void db_w(u8 data);
 	void rs_w(int state);

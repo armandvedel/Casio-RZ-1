@@ -54,6 +54,7 @@
 #include "frontend/mame/mameopts.h"
 #include "drivenum.h"
 #include "diimage.h"
+#include "video/hd44780.h"
 
 #include <iomanip>
 #include <fstream>
@@ -374,6 +375,13 @@ private:
     int lcdRefreshCounter = 0;
     bool forceNextRender = false;
     std::vector<uint8_t> lastButtonStates;
+
+    // --- HOST SYNC: one-shot CLOCK=EXT setup (manual 6-3) ---
+    int hostSyncSetupStep = 0;
+    double hostSyncSetupNext = 0.0;
+    double hostSyncSetupBase = 0.0;
+    bool hostSyncSetupStarted = false;
+    bool hostSyncSetupDone = false;
     
 public:
     
@@ -384,6 +392,60 @@ public:
     : osd_common_t(options), processor(p) {}
     
     virtual ~VstOsdInterface() {}
+
+    // Electronically press/release an RZ-1 panel key via its ioport field.
+    void syncPress(const char *tag, uint32_t mask, bool down)
+    {
+        ioport_port *port = mame_machine->root_device().ioport(tag);
+        if (port != nullptr)
+        {
+            ioport_field *field = port->field(mask);
+            if (field != nullptr)
+                field->set_value(down ? 1 : 0);
+        }
+    }
+
+    // Read the 16-character HD44780 display DDRAM (inline accessor, no libemu rebuild).
+    std::string rz1LcdText()
+    {
+        std::string s;
+        hd44780_device *lcd = mame_machine->root_device().subdevice<hd44780_device>("hd44780");
+        if (lcd != nullptr)
+        {
+            for (int i = 0; i < 16; ++i)
+            {
+                uint8_t c = lcd->display_char(static_cast<uint8_t>(i));
+                s += (c >= 0x20 && c < 0x7f) ? static_cast<char>(c) : ' ';
+            }
+        }
+        return s;
+    }
+
+    // Manual 6-3: from PATTERN PLAY, MIDI CLOCK key -> VALUE UP (if INT) ->
+    // MIDI CLOCK key, so the RZ-1 follows external MIDI clock (FA/F8/FC).
+    void runHostSyncSetup(double t)
+    {
+        if (t < hostSyncSetupNext) return;
+        switch (hostSyncSetupStep)
+        {
+        case 1: syncPress("kc4", 0x01, true);  hostSyncSetupNext = t + 0.15; hostSyncSetupStep = 2; break; // PATTERN down
+        case 2: syncPress("kc4", 0x01, false); hostSyncSetupNext = t + 0.30; hostSyncSetupStep = 3; break;
+        case 3: syncPress("kc5", 0x08, true);  hostSyncSetupNext = t + 0.15; hostSyncSetupStep = 4; break; // MIDI CLOCK down
+        case 4: syncPress("kc5", 0x08, false); hostSyncSetupNext = t + 0.30; hostSyncSetupStep = 5; break;
+        case 5: {
+            std::string lcd = rz1LcdText();
+            bool isExt = lcd.find("EXT") != std::string::npos;
+            if (isExt) { hostSyncSetupNext = t + 0.05; hostSyncSetupStep = 7; }
+            else { syncPress("kc7", 0x10, true); hostSyncSetupNext = t + 0.15; hostSyncSetupStep = 6; } // VALUE UP
+            break;
+        }
+        case 6: syncPress("kc7", 0x10, false); hostSyncSetupNext = t + 0.25; hostSyncSetupStep = 7; break;
+        case 7: syncPress("kc5", 0x08, true);  hostSyncSetupNext = t + 0.15; hostSyncSetupStep = 8; break; // MIDI CLOCK back
+        case 8: syncPress("kc5", 0x08, false); hostSyncSetupDone = true;
+                processor->hostSyncArmed.store(true, std::memory_order_release); break;
+        default: hostSyncSetupDone = true; break;
+        }
+    }
     
     virtual void init(running_machine &machine) override {
         
@@ -464,6 +526,24 @@ public:
                 mame_machine->schedule_exit();
                 return;
             }
+
+        // --- HOST SYNC: one-shot CLOCK=EXT setup after boot ---
+        if (processor->hostSyncEnabled.load(std::memory_order_relaxed)) {
+            double t = mame_machine->time().as_double();
+            // Re-arm after a warm reboot (machine time resets toward zero).
+            if (hostSyncSetupStarted && t < hostSyncSetupBase - 2.0) {
+                hostSyncSetupDone = false;
+                hostSyncSetupStarted = false;
+            }
+            if (!hostSyncSetupStarted && t >= 2.0) {
+                hostSyncSetupStarted = true;
+                hostSyncSetupBase = t;
+                hostSyncSetupStep = 1;
+                hostSyncSetupNext = t + 0.2;
+            }
+            if (!hostSyncSetupDone)
+                runHostSyncSetup(mame_machine->time().as_double());
+        }
 
                 // ==============================================================================
                 // --- THE PERFECT SILENT WATCHER (DIRECT MEMSHARE, CRASH-PROOF) ---
@@ -1069,6 +1149,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnsoniqSD1AudioProcessor::cr
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("buffer_size", 1), "Internal Buffer", bufferSizes, 2, nonAutomatable));
 
+    // RZ-1 host sync: drive the machine's CLOCK=EXT setting and stream FA/F8/FC
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID("host_sync", 1), "Host Sync (MIDI Clock)", true,
+        juce::AudioParameterBoolAttributes().withAutomatable(false)));
+
     // Dynamic Panel Layout Selector
     juce::StringArray views = { "Compact (Default)", "Full Keyboard", "Rack Panel", "Tablet View" };
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
@@ -1107,6 +1192,11 @@ void EnsoniqSD1AudioProcessor::parameterChanged(const juce::String& parameterID,
             
             requestedViewIndex.store(idx, std::memory_order_release);
             requestViewChange.store(true, std::memory_order_release);
+            requestGlobalSave.store(true, std::memory_order_release);
+        }
+
+    else if (parameterID == "host_sync") {
+            hostSyncEnabled.store(newValue >= 0.5f, std::memory_order_release);
             requestGlobalSave.store(true, std::memory_order_release);
         }
     
@@ -1209,6 +1299,7 @@ EnsoniqSD1AudioProcessor::EnsoniqSD1AudioProcessor()
     apvts.addParameterListener("mod_wheel", this);
     apvts.addParameterListener("buffer_size", this);
     apvts.addParameterListener("layout_view", this);
+    apvts.addParameterListener("host_sync", this);
     
     // Initialize VFD array to 0 (blank segments)
     for (int i = 0; i < VFD_SIZE; ++i) {
@@ -1873,6 +1964,83 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
             }
         }
     
+        // ========================================================
+        // HOST TEMPO SYNC: RZ-1 MIDI CLOCK (FA / F8 @ 24 ppq / FC)
+        // ========================================================
+        // With CLOCK=EXT set (see VstOsdInterface::runHostSyncSetup), the RZ-1
+        // starts on FA, stops on FC, and follows the F8 tick rate for tempo.
+        if (hostSyncEnabled.load(std::memory_order_relaxed) && mameMachine != nullptr)
+        {
+            double syncBpm = 120.0;
+            bool havePpq = false;
+            double ppq = 0.0;
+            if (auto* ph = getPlayHead())
+            {
+                if (auto pos = ph->getPosition())
+                {
+                    if (auto b = pos->getBpm()) syncBpm = *b;
+                    if (auto p = pos->getPpqPosition()) { ppq = *p; havePpq = true; }
+                }
+            }
+            if (!(syncBpm >= 20.0 && syncBpm <= 300.0)) syncBpm = 120.0;
+
+            double sr = hostSampleRate.load(std::memory_order_relaxed);
+            if (sr < 8000.0) sr = 48000.0;
+            const uint64_t blockStart = currentReadPos;
+            const uint64_t blockEnd = currentReadPos + static_cast<uint64_t>(numSamples);
+            const double nowMame = mameMachine->time().as_double();
+            const double ta = t_anchor;
+            const uint64_t sa = s_anchor;
+            const uint64_t effThreshold = static_cast<uint64_t>(threshold);
+
+            auto mameTimeForSample = [&](uint64_t sample) -> double
+            {
+                double target = ta + (static_cast<double>(sample + effThreshold) - static_cast<double>(sa)) / sr;
+                if (target < nowMame) target = nowMame;
+                return target;
+            };
+
+            // FA on play-start edge (or when CLOCK=EXT was just armed while the
+            // DAW was already running), FC on stop edge
+            const bool armedStart = hostSyncArmed.exchange(false, std::memory_order_acquire);
+            if ((isPlaying && !hostSyncLastPlaying) || (armedStart && isPlaying && !hostSyncFaSent))
+            {
+                pushMidiByte(0xFA, mameTimeForSample(blockStart));
+                hostSyncFaSent = true;
+                hostSyncLastTick = havePpq ? static_cast<int64_t>(std::floor(ppq * 24.0)) : -1;
+            }
+            else if (!isPlaying && hostSyncLastPlaying)
+            {
+                pushMidiByte(0xFC, mameTimeForSample(blockStart));
+                hostSyncFaSent = false;
+                hostSyncLastTick = -1;
+            }
+            hostSyncLastPlaying = isPlaying;
+
+            // F8 ticks while playing; each tick k sits at ppq = k/24
+            if (isPlaying && hostSyncFaSent)
+            {
+                const double samplesPerQuarter = 60.0 / syncBpm * sr;
+                const double samplesPerTick = samplesPerQuarter / 24.0;
+                for (;;)
+                {
+                    const int64_t k = hostSyncLastTick + 1;
+                    const double sampleOffset = havePpq
+                        ? (static_cast<double>(k) / 24.0 - ppq) * samplesPerQuarter
+                        : static_cast<double>(k - hostSyncLastTick) * samplesPerTick;
+                    const int64_t tickSample = static_cast<int64_t>(blockStart) + static_cast<int64_t>(sampleOffset);
+                    if (tickSample < static_cast<int64_t>(blockStart))
+                    {
+                        hostSyncLastTick = k; // playhead jumped within the block; resync without flooding
+                        continue;
+                    }
+                    if (tickSample >= static_cast<int64_t>(blockEnd)) break;
+                    pushMidiByte(0xF8, mameTimeForSample(static_cast<uint64_t>(tickSample)));
+                    hostSyncLastTick = k;
+                }
+            }
+        }
+
         // ========================================================
         // 1. TIMESTAMPED MIDI INJECTION
         // ========================================================

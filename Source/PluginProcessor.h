@@ -67,6 +67,14 @@ public:
     
     // New atomic flag to signal that the MAME engine is fully initialized and clocks are valid
         std::atomic<bool> mameIsFullyBooted{ false };
+
+    // --- HOST TEMPO SYNC (RZ-1 MIDI CLOCK: FA/F8/FC, CLOCK=EXT) ---
+    std::atomic<bool> hostSyncEnabled{ true };
+    std::atomic<bool> hostSyncArmed{ false };  // set by OSD once CLOCK=EXT is applied
+    // Audio-thread-only state (touched solely from processBlock):
+    bool hostSyncLastPlaying = false;
+    int64_t hostSyncLastTick = -1;
+    bool hostSyncFaSent = false;
     
     // --- DEBUG: Primitive counter for GUI detection ---
         std::atomic<int> lastPrimitiveCount{ 0 };
