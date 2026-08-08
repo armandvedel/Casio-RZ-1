@@ -1,0 +1,24 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "mac-arm64",
+      "displayName": "macOS arm64 Release",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0",
+        "JUCE_DIR": "$env{JUCE_DIR}",
+        "MAME_ROOT": "${sourceDir}/mame-mac-master"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "mac-arm64",
+      "configurePreset": "mac-arm64"
+    }
+  ]
+}

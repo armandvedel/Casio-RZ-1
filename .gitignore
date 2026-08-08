@@ -1,0 +1,12 @@
+.DS_Store
+build/
+build_vst/
+build_test/
+cmake-build-*/
+cfg/
+nvram/
+snap/
+*.log
+*.wav
+*.avi
+*.mng
