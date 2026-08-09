@@ -19,6 +19,25 @@ what is needed to build the two plugin formats is kept.
   sibling SD-1 AU) with "didn't find the component" even though the system
   AudioComponent registry instantiates it fine - treat Logic as the validator.
 
+## MIDI timing
+
+MIDI timing is subject to the emulated device, not just the plugin. The
+plugin schedules MIDI delivery accurately (clock and notes are delivered to
+the emulated UART within ~1 ms of their target), but the RZ-1's own firmware
+adds a variable MIDI→audio response of roughly 2.5–7.5 ms (mean ~4.5 ms,
+quantized in ~2 ms steps). That mean is reported as part of the plugin's
+latency so the host's delay compensation centers hits on the DAW grid, but
+the residual ±2.5 ms spread is the machine's genuine behavior (the same
+hardware-era timing a real RZ-1 exhibits).
+
+One known device limitation: under sustained dense MIDI note traffic
+(~30–50 notes), the RZ-1 firmware can enter a "MIDI DATA ERROR" state and
+drop subsequent notes, with the message flashing on the RZ-1's LCD. This has
+been reproduced headlessly with clean note-ons only (no clock, no sysex) and
+is a property of the emulated firmware rather than a plugin scheduling
+problem - the plugin's MIDI delivery itself is verified byte-perfect. See
+`test-scripts/HANDOFF.md` for the full diagnosis.
+
 ## Requirements
 
 - macOS (arm64; the build is hard-set to arm64 in `CMakeLists.txt`)
