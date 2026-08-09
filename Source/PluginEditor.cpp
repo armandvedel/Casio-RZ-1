@@ -412,14 +412,20 @@ void EnsoniqSD1AudioProcessorEditor::drawPanel (juce::Graphics& g)
         g.fillRect (btn.x, btn.y, btn.w, btn.h);
     }
 
-    // Pressed-button highlight
-    if (pressedButtonIndex >= 0
-        && pressedButtonIndex < static_cast<int> (audioProcessor.rz1Buttons.size()))
+    // Pressed/latched-button highlight (multi-hold: e.g. SAMPLING + SAMPLE 1)
+    const auto drawPressedHighlight = [&g, this] (int idx)
     {
-        const auto& btn = audioProcessor.rz1Buttons[static_cast<size_t> (pressedButtonIndex)];
-        g.setColour (juce::Colours::white.withAlpha (0.25f));
-        g.fillRect (btn.x, btn.y, btn.w, btn.h);
-    }
+        if (idx >= 0 && idx < static_cast<int> (audioProcessor.rz1Buttons.size()))
+        {
+            const auto& btn = audioProcessor.rz1Buttons[static_cast<size_t> (idx)];
+            g.setColour (juce::Colours::white.withAlpha (0.25f));
+            g.fillRect (btn.x, btn.y, btn.w, btn.h);
+        }
+    };
+    for (int idx : heldButtons)
+        drawPressedHighlight (idx);
+    for (int idx : latchedButtons)
+        drawPressedHighlight (idx);
 
     // Text labels
     for (const auto& t : panelTexts)
@@ -545,6 +551,39 @@ void EnsoniqSD1AudioProcessorEditor::setFaderFromY (int idx, float layoutY)
     repaint();
 }
 
+bool EnsoniqSD1AudioProcessorEditor::isButtonHeld (int idx) const
+{
+    if (std::find (heldButtons.begin(), heldButtons.end(), idx) != heldButtons.end())
+        return true;
+    return std::find (latchedButtons.begin(), latchedButtons.end(), idx) != latchedButtons.end();
+}
+
+bool EnsoniqSD1AudioProcessorEditor::isLatchableButton (int idx) const
+{
+    if (idx < 0 || idx >= static_cast<int> (audioProcessor.rz1Buttons.size()))
+        return false;
+    return audioProcessor.rz1Buttons[static_cast<size_t> (idx)].paramID == "btn_sampling";
+}
+
+void EnsoniqSD1AudioProcessorEditor::pressButton (int idx)
+{
+    if (idx < 0 || idx >= static_cast<int> (audioProcessor.buttonParams.size()))
+        return;
+    audioProcessor.buttonParams[static_cast<size_t> (idx)]->store (1.0f, std::memory_order_release);
+    if (std::find (heldButtons.begin(), heldButtons.end(), idx) == heldButtons.end())
+        heldButtons.push_back (idx);
+}
+
+void EnsoniqSD1AudioProcessorEditor::releaseButton (int idx)
+{
+    if (idx < 0 || idx >= static_cast<int> (audioProcessor.buttonParams.size()))
+        return;
+    audioProcessor.buttonParams[static_cast<size_t> (idx)]->store (0.0f, std::memory_order_release);
+    const auto it = std::find (heldButtons.begin(), heldButtons.end(), idx);
+    if (it != heldButtons.end())
+        heldButtons.erase (it);
+}
+
 void EnsoniqSD1AudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 {
     const juce::Point<float> lp = layoutFromEditor (e.getPosition());
@@ -559,15 +598,8 @@ void EnsoniqSD1AudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
     }
 
     const int idx = buttonIndexAt (lp);
-    if (idx >= 0 && idx < static_cast<int> (audioProcessor.buttonParams.size()))
-    {
-        // Momentary press: release anything held, then press the hit button.
-        if (pressedButtonIndex >= 0 && pressedButtonIndex < static_cast<int> (audioProcessor.buttonParams.size()))
-            audioProcessor.buttonParams[static_cast<size_t> (pressedButtonIndex)]->store (0.0f, std::memory_order_release);
-
-        pressedButtonIndex = idx;
-        audioProcessor.buttonParams[static_cast<size_t> (idx)]->store (1.0f, std::memory_order_release);
-    }
+    if (idx >= 0)
+        pressButton (idx);
 }
 
 void EnsoniqSD1AudioProcessorEditor::mouseDrag (const juce::MouseEvent& e)
@@ -580,25 +612,43 @@ void EnsoniqSD1AudioProcessorEditor::mouseDrag (const juce::MouseEvent& e)
         return;
     }
 
+    // Finger-drag model: everything already held stays down; pressing keys
+    // under the cursor adds them until mouse up (multi-key combos, drum rolls).
     const int idx = buttonIndexAt (lp);
-    if (idx != pressedButtonIndex)
-    {
-        if (pressedButtonIndex >= 0 && pressedButtonIndex < static_cast<int> (audioProcessor.buttonParams.size()))
-            audioProcessor.buttonParams[static_cast<size_t> (pressedButtonIndex)]->store (0.0f, std::memory_order_release);
-        pressedButtonIndex = -1;
-
-        if (idx >= 0 && idx < static_cast<int> (audioProcessor.buttonParams.size()))
-        {
-            pressedButtonIndex = idx;
-            audioProcessor.buttonParams[static_cast<size_t> (idx)]->store (1.0f, std::memory_order_release);
-        }
-    }
+    if (idx >= 0 && ! isButtonHeld (idx))
+        pressButton (idx);
 }
 
-void EnsoniqSD1AudioProcessorEditor::mouseUp (const juce::MouseEvent&)
+void EnsoniqSD1AudioProcessorEditor::mouseUp (const juce::MouseEvent& e)
 {
     activeFader = -1;
-    if (pressedButtonIndex >= 0 && pressedButtonIndex < static_cast<int> (audioProcessor.buttonParams.size()))
-        audioProcessor.buttonParams[static_cast<size_t> (pressedButtonIndex)]->store (0.0f, std::memory_order_release);
-    pressedButtonIndex = -1;
+
+    const int idx = buttonIndexAt (layoutFromEditor (e.getPosition()));
+    const bool simpleClick = (heldButtons.size() == 1 && heldButtons.front() == idx);
+
+    if (simpleClick && isLatchableButton (idx))
+    {
+        // Latchable key toggles on click: first click keeps it held, a second
+        // click (or a later release path) lets go.
+        const auto latchedIt = std::find (latchedButtons.begin(), latchedButtons.end(), idx);
+        if (latchedIt != latchedButtons.end())
+        {
+            latchedButtons.erase (latchedIt);
+            releaseButton (idx);
+        }
+        else
+        {
+            latchedButtons.push_back (idx);
+            const auto heldIt = std::find (heldButtons.begin(), heldButtons.end(), idx);
+            if (heldIt != heldButtons.end())
+                heldButtons.erase (heldIt);
+        }
+        return;
+    }
+
+    // Release everything the gesture held; latched keys stay down.
+    for (int h : heldButtons)
+        if (std::find (latchedButtons.begin(), latchedButtons.end(), h) == latchedButtons.end())
+            releaseButton (h);
+    heldButtons.clear();
 }

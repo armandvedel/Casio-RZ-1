@@ -42,8 +42,21 @@ private:
     int faderIndexAt (juce::Point<float> layoutPos) const;
     void setFaderFromY (int idx, float layoutY);
 
-    // Currently mouse-pressed button index (for highlight + release tracking)
-    int pressedButtonIndex = -1;
+    // Multi-key panel input: the mouse gesture can hold several buttons at
+    // once (e.g. hold SAMPLING while tapping SAMPLE 1), and latchable keys
+    // (currently SAMPLING) stay held after a click so a single mouse can
+    // perform two-key combos. Both sets drive the pressed highlight.
+    bool isButtonHeld (int idx) const;
+    bool isLatchableButton (int idx) const;
+    void pressButton (int idx);
+    void releaseButton (int idx);
+
+    // Buttons currently held by the mouse gesture (released on mouse up).
+    std::vector<int> heldButtons;
+
+    // Buttons latched by a click (toggle-hold), kept pressed until clicked
+    // again. SAMPLING is latchable for the SAMPLING + SAMPLE 1-4 combo.
+    std::vector<int> latchedButtons;
 
     // Fader values (0..1, default full) and which fader is being dragged.
     // 0-9 instruments, 10 sampling level (visual only), 11 overall volume.
