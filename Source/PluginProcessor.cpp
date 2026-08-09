@@ -871,7 +871,8 @@ public:
                 std::lock_guard<std::mutex> lock(processor->debugLogMutex);
                 juce::File logFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
                     .getChildFile("CasioRZ1").getChildFile("mame_boot_log.txt");
-                logFile.appendText("t=" + juce::String(mame_machine->time().as_double(), 4)
+                logFile.appendText("t name=" + processor->getName()
+                                   + " t=" + juce::String(mame_machine->time().as_double(), 4)
                                    + " wall=" + juce::String(wallNow, 2)
                                    + " lcd=\"" + lcd + "\"\n");
             }
@@ -2058,25 +2059,29 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
       int numSamples = buffer.getNumSamples();
       if (numSamples <= 0) return; // Safety check
 
-        // --- RENDER DIAGNOSTIC (first 10 blocks) ---
+        // --- RENDER DIAGNOSTIC (during boot + first post-boot block) ---
         // Confirms the host actually calls processBlock and shows the
         // ring/anchor state. If these lines never appear, the host isn't
         // rendering the plugin at all (which stalls MAME's audio-driven boot).
-        if (pbDiagCount < 10)
+        const bool bootedNow = mameIsFullyBooted.load(std::memory_order_acquire);
+        if (pbDiagCount < 40 || (bootedNow && !pbLoggedBootedY))
         {
+            if (bootedNow)
+                pbLoggedBootedY = true;
             pbDiagCount++;
             static const auto bootWallStart = std::chrono::steady_clock::now();
             const double wallNow = std::chrono::duration<double>(std::chrono::steady_clock::now() - bootWallStart).count();
             std::lock_guard<std::mutex> lock(debugLogMutex);
             juce::File logFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
                 .getChildFile("CasioRZ1").getChildFile("mame_boot_log.txt");
-            logFile.appendText("pb wall=" + juce::String(wallNow, 2)
+            logFile.appendText("pb name=" + getName()
+                + " wall=" + juce::String(wallNow, 2)
                 + " n=" + juce::String(numSamples)
                 + " in=" + juce::String(getTotalNumInputChannels())
                 + " w=" + juce::String(totalWritten.load(std::memory_order_relaxed))
                 + " r=" + juce::String(totalRead.load(std::memory_order_relaxed))
                 + " anchor=" + juce::String(needAnchorSync.load(std::memory_order_relaxed) ? "y" : "n")
-                + " booted=" + juce::String(mameIsFullyBooted.load(std::memory_order_acquire) ? "y" : "n")
+                + " booted=" + juce::String(bootedNow ? "y" : "n")
                 + " mameT=" + (mameMachine != nullptr ? juce::String(mameMachine->time().as_double(), 4) : juce::String("none"))
                 + "\n");
         }
@@ -2086,6 +2091,17 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         // If we call mameMachine->time().as_double() before clocks are set, it triggers SIGFPE (divide by zero).
         if (!mameIsFullyBooted.load(std::memory_order_acquire)) {
             buffer.clear(); // Output silence until the engine is stable
+            // Drain any prefilled silence so MAME's audio throttle can never
+            // deadlock while the engine boots. A host that renders immediately
+            // (e.g. Logic's aumf hosting) would otherwise leave the ring full
+            // (w=threshold, r=0) while processBlock returns here without
+            // consuming, blocking MAME before its first frame. This matches
+            // the warm-boot pre-roll's silent-consume pattern.
+            const uint64_t wPos = totalWritten.load(std::memory_order_relaxed);
+            const uint64_t rPos = totalRead.load(std::memory_order_relaxed);
+            if (wPos > rPos)
+                totalRead.store(wPos, std::memory_order_release);
+            mameThrottleEvent.signal();
             return;
         }
     

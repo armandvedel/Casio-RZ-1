@@ -553,6 +553,11 @@ private:
     
     bool lastOfflineState = false;
     int64_t lastPlayheadPos = 0;
+
+    // Render diagnostics (first blocks only): helps identify hosts that stop
+    // calling processBlock, which stalls MAME's audio-driven boot.
+    int pbDiagCount = 0;
+    bool pbLoggedBootedY = false;
     
     juce::String instanceTempDir; // Unique sandbox directory for this plugin instance
     
