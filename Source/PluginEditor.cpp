@@ -7,8 +7,8 @@ EnsoniqSD1AudioProcessorEditor::EnsoniqSD1AudioProcessorEditor (EnsoniqSD1AudioP
     setOpaque (false);
     setPaintingIsUnclipped (true);
     setResizable (true, true);
-    setSize (800, 535); // rz1.lay native view size (no letterboxing at default aspect)
-    setResizeLimits (320, 214, 2560, 1712);
+    setSize (1200, 802); // rz1.lay native view at 1.5x (labels read clearly)
+    setResizeLimits (480, 321, 3840, 2568);
     startTimerHz (30);
 }
 

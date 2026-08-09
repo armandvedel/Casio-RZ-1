@@ -398,9 +398,9 @@ public:
         // --- PIXEL PERFECT RENDERING ---
         // Stores the exact physical pixel dimensions of the current JUCE window.
         // MAME will strictly render at this 1:1 resolution to save CPU and maximize sharpness.
-        // Default matches the rz1.lay view aspect (800x535).
-        std::atomic<int> windowWidth{ 800 };
-        std::atomic<int> windowHeight{ 535 };
+        // Default matches the rz1.lay view aspect at 1.5x (1200x802).
+        std::atomic<int> windowWidth{ 1200 };
+        std::atomic<int> windowHeight{ 802 };
         std::atomic<bool> requestRenderResize{ false };
 
         std::atomic<bool>& getFrameFlag() { return newFrameAvailable; }

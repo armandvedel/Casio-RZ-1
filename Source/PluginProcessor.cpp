@@ -371,9 +371,11 @@ int EnsoniqSD1AudioProcessor::readMidiByte() {
 // The plugin's minimal OSD skips osd_common_t::init_subsystems(), so MAME's
 // font modules are never selected and layout text would fall back to the
 // compiled-in 23 px bitmap font (pixelated labels). Rendering the layout text
-// through CoreText instead lets us pick a font designed for small sizes:
-// SF Mono is the sharpest of the families tested (Arial Unicode MS, Verdana,
-// Tahoma, Menlo, SF Mono) at the panel's 7-31 px label sizes.
+// through CoreText instead lets us pick a font designed for small sizes.
+// Verdana is the chosen family: it was designed for screen legibility at small
+// sizes, it is proportional (~0.5 em) so it fits rz1.lay's fixed label boxes
+// without MAME's horizontal aspect squeezing, and it measured second-sharpest
+// (behind SF Mono) on the panel's 7-31 px labels.
 class VstOsdFont : public osd_font
 {
 public:
@@ -390,7 +392,7 @@ public:
 
     bool open(std::string const &font_path, std::string const &name, int &height) override
     {
-        const char *family = (name == "default") ? "SF Mono" : name.c_str();
+        const char *family = (name == "default") ? "Verdana" : name.c_str();
         m_primary = create_font(family, m_height, m_baseline, m_xscale);
         if (m_primary == nullptr)
         {
@@ -491,12 +493,6 @@ public:
 
 private:
     static constexpr CGFloat POINT_SIZE = 144.0;
-    // SF Mono's 0.6 em advance is wider than the layout's fixed label boxes
-    // (designed for a ~0.5 em proportional font), so MAME's layout engine
-    // squishes each label to fit — visibly "smushed" and inconsistent across
-    // labels. Condensing the font horizontally to ~0.5 em makes nearly every
-    // label fit naturally while keeping the monospace look.
-    static constexpr CGFloat CONDENSE = 0.83f;
 
     static CTFontRef create_font(const char *family, CGFloat &height, CGFloat &baseline, CGFloat xscale)
     {
@@ -522,7 +518,10 @@ private:
 
     CTFontRef m_primary = nullptr;
     CTFontRef m_fallback = nullptr;
-    CGFloat m_xscale = CONDENSE;
+    // 1.0 for Verdana: its ~0.5 em proportional advance fits the layout's
+    // label boxes without MAME having to squeeze anything (SF Mono needed
+    // 0.83 here; the knob is kept for future experimentation).
+    CGFloat m_xscale = 1.0f;
     CGFloat m_height = 0.0;
     CGFloat m_baseline = 0.0;
     CGFloat m_fallbackBaseline = 0.0;
@@ -640,8 +639,8 @@ public:
         int startW = processor->windowWidth.load(std::memory_order_acquire);
         int startH = processor->windowHeight.load(std::memory_order_acquire);
 
-        if (startW <= 0) startW = 800;
-        if (startH <= 0) startH = 535;
+        if (startW <= 0) startW = 1200;
+        if (startH <= 0) startH = 802;
 
         // SINGLE ALLOCATION with exact dimensions
         main_target = machine.render().target_alloc();
@@ -916,7 +915,7 @@ public:
         // leave the 800x535 layout in the top-left corner and mis-scale the UI.)
         int bufW = processor->windowWidth.load(std::memory_order_acquire);
         int bufH = processor->windowHeight.load(std::memory_order_acquire);
-        if (bufW <= 0 || bufH <= 0) { bufW = 800; bufH = 535; }
+        if (bufW <= 0 || bufH <= 0) { bufW = 1200; bufH = 802; }
         if (processor->screenBuffers[0].getWidth() != bufW ||
             processor->screenBuffers[0].getHeight() != bufH)
         {
