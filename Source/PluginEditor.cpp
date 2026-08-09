@@ -56,20 +56,27 @@ const juce::Rectangle<int> sampleLabelStrips[] =
 
 // Instrument level faders: 10 vertical sliders filling the horizontal space
 // ABOVE the "INSTRUMENT LEVEL" label, up near the top of the window (between
-// the top bar and the label), with the instrument name inside each slot.
+// the top bar and the label), with the instrument name labelled below each
+// fader.
 constexpr int    faderCount  = 10;
-constexpr float  faderX0     = 53.0f;
-constexpr float  faderPitch  = 37.8f;  // full strip width (53 .. ~431)
+// Fader x-centers align with the "1..10" digits on the teal strip above.
+constexpr float  faderCenters[faderCount] =
+    { 70.5f, 108.5f, 144.5f, 184.5f, 222.5f, 260.5f, 297.5f, 335.5f, 374.5f, 412.0f };
+constexpr float  faderHalfCell = 19.0f;
 constexpr float  faderY0     = 30.0f;  // below the top bar
-constexpr float  faderH      = 128.0f; // y 30..158, filling the space above the label
+constexpr float  faderH      = 109.0f; // ~15% shorter: y 30..139
 constexpr float  faderSlotW  = 30.0f;
 constexpr float  faderCapH   = 12.0f;
-constexpr float  faderLabelY = 32.0f;
+constexpr float  faderLabelY = faderY0 + faderH + 2.0f; // 141, below the fader
+constexpr float  faderLabelH = 14.0f;
 
-const char* const faderLabels[faderCount] =
+struct FaderLabel { const char* line1; const char* line2; };
+
+const FaderLabel faderLabels[faderCount] =
 {
-    "TOM 1", "TOM 2", "TOM 3", "B D", "RIM/SD",
-    "HIHAT", "CLAPS/RIDE", "COWBELL/CRASH", "SAMPLE 1/2", "SAMPLE 3/4",
+    { "TOM 1", nullptr }, { "TOM 2", nullptr }, { "TOM 3", nullptr }, { "B D", nullptr },
+    { "RIM/SD", nullptr }, { "HIHAT", nullptr }, { "CLAPS", "RIDE" },
+    { "COWBELL", "CRASH" }, { "SAMPLE", "1/2" }, { "SAMPLE", "3/4" },
 };
 
 // All text elements (auto-generated from rz1.lay: position, string, color).
@@ -326,24 +333,35 @@ void EnsoniqSD1AudioProcessorEditor::drawPanel (juce::Graphics& g)
     // Instrument level faders
     for (int i = 0; i < faderCount; ++i)
     {
-        const float cx = faderX0 + i * faderPitch;
+        const float cx = faderCenters[i];
         const float slotX = cx - faderSlotW * 0.5f;
 
         // Slot (track)
         g.setColour (juce::Colour (51, 51, 51));
         g.fillRect (slotX, faderY0, faderSlotW, faderH);
 
-        // Instrument label inside the top of the slot
+        // Instrument label(s) below the fader (up to two lines)
         g.setFont (juce::FontOptions().withName ("Verdana").withHeight (7.0f).withStyle ("Bold"));
         g.setColour (panelWhite);
-        g.drawText (juce::String (faderLabels[i]),
-                    cx - faderPitch * 0.5f, faderLabelY, faderPitch, 8.0f,
-                    juce::Justification::centred, false);
+        if (faderLabels[i].line2 != nullptr)
+        {
+            g.drawText (juce::String (faderLabels[i].line1),
+                        cx - faderHalfCell, faderLabelY, faderHalfCell * 2.0f, 7.0f,
+                        juce::Justification::centred, false);
+            g.drawText (juce::String (faderLabels[i].line2),
+                        cx - faderHalfCell, faderLabelY + 7.0f, faderHalfCell * 2.0f, 7.0f,
+                        juce::Justification::centred, false);
+        }
+        else
+        {
+            g.drawText (juce::String (faderLabels[i].line1),
+                        cx - faderHalfCell, faderLabelY, faderHalfCell * 2.0f, faderLabelH,
+                        juce::Justification::centred, false);
+        }
 
-        // Cap, positioned by the fader value (top = full), sliding below the
-        // label zone inside the slot.
+        // Cap, positioned by the fader value (top = full).
         const float v = (i < faderCount) ? faderValues[i] : 1.0f;
-        const float capY = faderY0 + faderCapH + (1.0f - v) * (faderH - 2.0f * faderCapH);
+        const float capY = faderY0 + (1.0f - v) * (faderH - faderCapH);
         g.setColour (juce::Colour (211, 206, 193));
         g.fillRect (slotX - 1.0f, capY, faderSlotW + 2.0f, faderCapH);
 
@@ -441,20 +459,26 @@ int EnsoniqSD1AudioProcessorEditor::faderIndexAt (juce::Point<float> layoutPos) 
 {
     if (layoutPos.y < faderY0 || layoutPos.y > faderY0 + faderH)
         return -1;
-    const int i = static_cast<int> (std::floor ((layoutPos.x - faderX0) / faderPitch + 0.5f));
-    if (i < 0 || i >= faderCount)
-        return -1;
-    if (std::abs (layoutPos.x - (faderX0 + i * faderPitch)) > faderPitch * 0.5f)
-        return -1;
-    return i;
+    int best = -1;
+    float bestDist = faderHalfCell;
+    for (int k = 0; k < faderCount; ++k)
+    {
+        const float d = std::abs (layoutPos.x - faderCenters[k]);
+        if (d < bestDist)
+        {
+            bestDist = d;
+            best = k;
+        }
+    }
+    return best;
 }
 
 void EnsoniqSD1AudioProcessorEditor::setFaderFromY (int idx, float layoutY)
 {
     if (idx < 0 || idx >= faderCount)
         return;
-    const float travel = faderH - 2.0f * faderCapH;
-    float v = 1.0f - (layoutY - (faderY0 + faderCapH)) / travel;
+    const float travel = faderH - faderCapH;
+    float v = 1.0f - (layoutY - faderY0) / travel;
     v = juce::jlimit (0.0f, 1.0f, v);
     faderValues[idx] = v;
     audioProcessor.instrumentLevel[idx].store (v, std::memory_order_relaxed);
