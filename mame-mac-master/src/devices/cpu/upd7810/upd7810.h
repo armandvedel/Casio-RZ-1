@@ -319,6 +319,7 @@ protected:
 	uint16_t  m_rxs;    /* receiver shift register */
 	uint8_t   m_txcnt;  /* transmitter shift register bit count */
 	uint8_t   m_rxcnt;  /* receiver shift register bit count */
+	uint8_t   m_rxphase;/* receiver oversampling phase (async mode) */
 	uint8_t   m_txbuf;  /* transmitter buffer was written */
 	int32_t   m_ovc0;   /* overflow counter for timer 0 (for clock div 12/384) */
 	int32_t   m_ovc1;   /* overflow counter for timer 0 (for clock div 12/384) */

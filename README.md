@@ -30,13 +30,40 @@ latency so the host's delay compensation centers hits on the DAW grid, but
 the residual ±2.5 ms spread is the machine's genuine behavior (the same
 hardware-era timing a real RZ-1 exhibits).
 
-One known device limitation: under sustained dense MIDI note traffic
-(~30–50 notes), the RZ-1 firmware can enter a "MIDI DATA ERROR" state and
-drop subsequent notes, with the message flashing on the RZ-1's LCD. This has
-been reproduced headlessly with clean note-ons only (no clock, no sysex) and
-is a property of the emulated firmware rather than a plugin scheduling
-problem - the plugin's MIDI delivery itself is verified byte-perfect. See
-`test-scripts/HANDOFF.md` for the full diagnosis.
+### Emulated uPD7810 SIO fix ("MIDI DATA ERROR")
+
+An earlier limitation is fixed: under sustained dense MIDI note traffic
+(~30–50 notes) the RZ-1 firmware could flash **"MIDI DATA ERROR!"** on the
+LCD and drop subsequent notes. Headless reproduction with clean note-ons
+only (no clock, no sysex) traced the fault to the emulated **uPD7810 serial
+interface** in `mame-mac-master/src/devices/cpu/upd7810/upd7810.cpp`, not to
+plugin scheduling (the plugin's MIDI delivery was already verified
+byte-perfect).
+
+Root cause: the MAME uPD7810 core's asynchronous receiver sampled each
+incoming bit at its **leading edge** - it synchronized on the start-bit
+edge and then took one sample per bit at start+1..start+8 bit times. The
+real uPD7810 async SIO oversamples (×16/×64 clock rates) and reads bits at
+their centers. Depending on the phase between the 31.25 kbaud MIDI stream
+and the emulated CPU's sample clock, samples landed on the bit boundaries,
+and the emulator's CPU/timer event ordering could read the *previous* bit's
+value. That produced sporadic bit errors (e.g. 0x50→0x70, 0x90→0xC9),
+framing errors, and finally the firmware's error path (its receive ISR
+pushes 0xFF into the ring when the UART error flag is set, and the MIDI
+parser's 0xFF branch displays message 38, "MIDI DATA ERROR!").
+
+Fix: the asynchronous receiver now **oversamples the receive line at 4× the
+bit rate** and shifts only the samples taken at **bit centers** (start-bit
+edge + half a bit, then every bit time) into the receive register. This
+matches the real hardware behavior and makes reception insensitive to the
+phase between transmitter and receiver. Transmit timing, synchronous mode,
+and external-clock mode are unchanged, so other uPD7810-based machines are
+not affected. Upstream MAME carries the identical leading-edge sampling
+code, so this fix is a candidate for upstreaming there. Verified headlessly:
+50 dense note-ons (150 bytes) previously latched the error at note ~11-30
+depending on phase; with the fix the same stream decodes 100% clean across
+repeated runs, tempos, and harness modes. See `test-scripts/HANDOFF.md` for
+the full diagnosis.
 
 ## Requirements
 

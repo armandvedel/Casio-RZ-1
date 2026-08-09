@@ -1177,6 +1177,20 @@ void upd7810_device::upd7810_sio_input()
 	if (m_rxcnt > 0)
 	{
 		RXD = m_rxd_func();
+
+		if (SML & 0x03)     /* asynchronous mode ? */
+		{
+			/* the receive line is oversampled at four times the bit rate;
+			   shift only the samples taken at the bit centers into the
+			   receive register and discard the rest */
+			if (m_rxphase != 0)
+			{
+				m_rxphase--;
+				return;
+			}
+			m_rxphase = 3;
+		}
+
 		m_rxs = (m_rxs >> 1) | ((uint16_t)RXD << 15);
 		m_rxcnt--;
 		if (0 == m_rxcnt)
@@ -1364,7 +1378,10 @@ void upd7810_device::upd7810_sio_input()
 				break;
 			}
 
-			m_rxcnt--; // reduce by one since we already received the start bit at this point
+			/* the start bit was sampled on the falling edge of the receive
+			   line; take the first data sample one quarter bit later so the
+			   remaining samples land at the centers of the data/stop bits */
+			m_rxphase = 1;
 		}
 		else
 		/* TSK bit set ? */
@@ -1436,16 +1453,29 @@ void upd7810_device::update_sio(int cycles)
 	const int prescale[] = { 1, 1, 16, 64 };
 	const int interval = divider[SMH & 0x03] * prescale[SML & 0x03];
 
+	/* in asynchronous mode the receive line is sampled at four times the
+	   bit rate so the data bits can be read at their centers; synchronous,
+	   external-clock and idle configurations keep the original
+	   one-sample-per-bit cadence */
+	const bool fast_rx = ((SMH & 0x03) != 0x03) && (SMH & 0x08) && (SML & 0x03);
+	const int step = fast_rx ? interval / 4 : interval / 2;
+
 	OVCS += cycles;
 
-	while (OVCS >= interval / 2)
+	while (OVCS >= step)
 	{
-		OVCS -= (interval / 2);
+		OVCS -= step;
 
-		if (0 == (EDGES ^= 1))
-			upd7810_sio_input(); // rising edge
-		else
-			upd7810_sio_output(); // falling edge
+		/* sample the receive line every quarter bit in async mode, every
+		   half bit otherwise */
+		if (fast_rx || (0 == (EDGES & 1)))
+			upd7810_sio_input();
+
+		/* the transmitter shifts one bit per bit time */
+		if (fast_rx ? (0 == (EDGES & 3)) : (1 == (EDGES & 1)))
+			upd7810_sio_output();
+
+		EDGES++;
 	}
 }
 
@@ -1745,6 +1775,7 @@ void upd7810_device::base_device_start()
 	save_item(NAME(m_rxs));
 	save_item(NAME(m_txcnt));
 	save_item(NAME(m_rxcnt));
+	save_item(NAME(m_rxphase));
 	save_item(NAME(m_txbuf));
 	save_item(NAME(m_ovc0));
 	save_item(NAME(m_ovc1));
@@ -1978,6 +2009,7 @@ void upd7810_device::device_reset()
 	m_rxs = ~0;
 	m_txcnt = 0;
 	m_rxcnt = 0;
+	m_rxphase = 0;
 	m_txbuf = 0;
 	m_ovc0 = 0;
 	m_ovc1 = 0;
