@@ -49,8 +49,10 @@ upd934g_device::upd934g_device(const machine_config &mconfig, const char *tag, d
 
 void upd934g_device::device_start()
 {
-	// create sound stream
-	m_stream = stream_alloc(0, 4, 20000);
+	// create sound stream; the chip clocks one PCM byte per 64 clock cycles
+	// (pg1 at 1.28 MHz -> exactly 20 kHz, pg0 at 1.333 MHz -> ~20.83 kHz,
+	// which matches the RZ-1 firmware's ~20.83 kHz sampling rate)
+	m_stream = stream_alloc(0, 4, clock() / 64);
 
 	// register for save states
 	save_item(NAME(m_addr));

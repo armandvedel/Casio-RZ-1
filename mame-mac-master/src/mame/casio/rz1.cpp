@@ -16,14 +16,15 @@
     - EXK-F19Z2064 (10-bit DAC)
 
     Notes:
-    - Each sample ROM holds 1.49s of sounds in the following format:
-      PCM data, signed 8-bit, mono, 20,000 Hz
+    - Each sample ROM holds ~1.5s of sounds in the following format:
+      PCM data, signed 8-bit, mono, played at the PG clock/64 rate
+      (pg0 at 1.333 MHz -> ~20.83 kHz, pg1 at 1.28 MHz -> 20 kHz)
     - Holding EDIT/RECORD, DELETE, INSERT/AUTO-COMPENSATE and
       CHAIN/BEAT at startup causes the system to go into a RAM test.
 
     TODO:
     - Metronome
-    - Make audio input generic (core support needed)
+    - SAMPLING LEVEL pot (not yet emulated)
 
 ***************************************************************************/
 
@@ -44,6 +45,90 @@
 #include "rz1.lh"
 
 
+DECLARE_DEVICE_TYPE(RZ1_SAMPLE_INPUT, rz1_sample_input_device)
+
+
+//**************************************************************************
+//  SAMPLE INPUT ADAPTER
+//**************************************************************************
+
+// Converts the live microphone / host audio stream into the value the CPU's
+// ADC reads on AN0-AN7. Replaces the old "linein" cassette hack: this reads
+// the OSD audio input stream at the exact machine time of each ADC read, so
+// the recorded samples track the input without stream-quantization artifacts.
+
+class rz1_sample_input_device : public device_t, public device_sound_interface
+{
+public:
+	rz1_sample_input_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock = 0)
+		: device_t(mconfig, RZ1_SAMPLE_INPUT, tag, owner, clock),
+			device_sound_interface(mconfig, *this),
+			m_stream(nullptr),
+			m_current(0.0f),
+			m_window_start(0),
+			m_window_count(0)
+	{
+	}
+
+	// value of the input at the current machine time, -1..1
+	float current_value()
+	{
+		if (m_stream == nullptr)
+			return 0.0f;
+		m_stream->update();
+		u64 const idx = static_cast<u64>(machine().time().as_double() * machine().sample_rate());
+		if (idx < m_window_start)
+			return m_window[0];
+		u64 const off = idx - m_window_start;
+		if (off >= m_window_count)
+			return m_window[m_window_count - 1];
+		return m_window[off];
+	}
+
+protected:
+	virtual void device_start() override ATTR_COLD
+	{
+		m_current = 0.0f;
+		m_window_start = 0;
+		m_window_count = 0;
+		for (float &v : m_window)
+			v = 0.0f;
+		m_stream = stream_alloc(1, 1, machine().sample_rate());
+		save_item(NAME(m_current));
+		save_item(NAME(m_window_start));
+		save_item(NAME(m_window_count));
+		save_item(NAME(m_window));
+	}
+
+	virtual void sound_stream_update(sound_stream &stream) override
+	{
+		u32 n = stream.samples();
+		u64 start = stream.start_index();
+		if (n > WINDOW_MAX)
+		{
+			start += n - WINDOW_MAX;
+			n = WINDOW_MAX;
+		}
+		m_window_start = start;
+		m_window_count = n;
+		for (u32 i = 0; i < n; i++)
+			m_window[i] = stream.get(0, i);
+		m_current = m_window[n - 1];
+		stream.copy(0, 0); // line-in monitor
+	}
+
+private:
+	static constexpr u32 WINDOW_MAX = 16384;
+	sound_stream *m_stream;
+	float m_current;
+	u64 m_window_start;
+	u32 m_window_count;
+	float m_window[WINDOW_MAX];
+};
+
+DEFINE_DEVICE_TYPE(RZ1_SAMPLE_INPUT, rz1_sample_input_device, "rz1_sample_input", "RZ-1 sample input")
+
+
 namespace {
 
 
@@ -62,6 +147,7 @@ public:
 		m_toms(*this, "tom%u", 1U),
 		m_bd(*this, "bd"),
 		m_cassette(*this, "cassette"),
+		m_mic(*this, "mic"),
 		m_linein(*this, "linein"),
 		m_keys(*this, "kc%u", 0U),
 		m_foot(*this, "foot"),
@@ -87,7 +173,8 @@ private:
 	required_device_array<speaker_device, 3> m_toms;
 	required_device<speaker_device> m_bd;
 	required_device<cassette_image_device> m_cassette;
-	required_device<cassette_image_device> m_linein;
+	required_device<microphone_device> m_mic;
+	required_device<rz1_sample_input_device> m_linein;
 	required_ioport_array<8> m_keys;
 	required_ioport m_foot;
 
@@ -303,7 +390,7 @@ void rz1_state::upd934g_b_w(offs_t offset, uint8_t data)
 
 uint8_t rz1_state::analog_r()
 {
-	return uint8_t(int8_t(m_linein->input() * 127.0) + 127);
+	return uint8_t(int8_t(m_linein->current_value() * 127.0) + 127);
 }
 
 
@@ -494,11 +581,11 @@ void rz1_state::rz1(machine_config &config)
 	m_cassette->set_interface("rz1_cass");
 	m_cassette->add_route(ALL_OUTPUTS, "speaker", 0.05);
 
-	// should be a generic audio input port, using cassette for now
-	CASSETTE(config, m_linein);
-	m_linein->set_default_state(CASSETTE_STOPPED | CASSETTE_MOTOR_ENABLED | CASSETTE_SPEAKER_ENABLED);
-	m_linein->set_interface("audio_cass");
-	m_linein->add_route(ALL_OUTPUTS, "speaker", 0.05);
+	// live audio input: host/OSD microphone stream -> ADC; monitored on "speaker"
+	MICROPHONE(config, m_mic, 1).front_center();
+	RZ1_SAMPLE_INPUT(config, m_linein);
+	m_mic->add_route(0, *m_linein, 1.0);
+	m_linein->add_route(0, "speaker", 0.05);
 
 	SOFTWARE_LIST(config, "cass_list").set_original("rz1_cass");
 }
