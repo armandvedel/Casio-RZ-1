@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+#include <cmath>
 #include <cstring>
 
 // ==============================================================================
@@ -52,6 +53,16 @@ const juce::Rectangle<int> sampleLabelStrips[] =
     { 662, 379, 46, 9 },   // SAMPLE 3
     { 662, 436, 46, 9 },   // SAMPLE 4
 };
+
+// Instrument level faders: 10 vertical sliders in the INSTRUMENT LEVEL strip,
+// positioned left of the LCD (as on the real RZ-1).
+constexpr int    faderCount  = 10;
+constexpr float  faderX0     = 53.0f;
+constexpr float  faderPitch  = 24.7f;
+constexpr float  faderY0     = 188.0f;
+constexpr float  faderH      = 56.0f;
+constexpr float  faderSlotW  = 20.0f;
+constexpr float  faderCapH   = 12.0f;
 
 // All text elements (auto-generated from rz1.lay: position, string, color).
 const PanelText panelTexts[] =
@@ -304,6 +315,27 @@ void EnsoniqSD1AudioProcessorEditor::drawPanel (juce::Graphics& g)
                                    .withHeight (11.0f).withStyle ("Bold"));
     g.drawText (juce::String (lcd), 342, 224, 115, 20, juce::Justification::centred, false);
 
+    // Instrument level faders
+    for (int i = 0; i < faderCount; ++i)
+    {
+        const float cx = faderX0 + i * faderPitch;
+        const float slotX = cx - faderSlotW * 0.5f;
+
+        // Slot (track)
+        g.setColour (juce::Colour (51, 51, 51));
+        g.fillRect (slotX, faderY0, faderSlotW, faderH);
+
+        // Cap, positioned by the fader value (top = full)
+        const float v = (i < faderCount) ? faderValues[i] : 1.0f;
+        const float capY = faderY0 + (1.0f - v) * (faderH - faderCapH);
+        g.setColour (juce::Colour (211, 206, 193));
+        g.fillRect (slotX - 1.0f, capY, faderSlotW + 2.0f, faderCapH);
+
+        // Grip groove on the cap
+        g.setColour (juce::Colour (38, 28, 28));
+        g.fillRect (slotX + 2.0f, capY + faderCapH * 0.5f - 0.5f, faderSlotW - 4.0f, 1.0f);
+    }
+
     // Buttons (flat, faithful to rz1.lay)
     for (const auto& btn : audioProcessor.rz1Buttons)
     {
@@ -389,9 +421,43 @@ int EnsoniqSD1AudioProcessorEditor::buttonIndexAt (juce::Point<float> layoutPos)
     return -1;
 }
 
+int EnsoniqSD1AudioProcessorEditor::faderIndexAt (juce::Point<float> layoutPos) const
+{
+    if (layoutPos.y < faderY0 || layoutPos.y > faderY0 + faderH)
+        return -1;
+    const int i = static_cast<int> (std::floor ((layoutPos.x - faderX0) / faderPitch + 0.5f));
+    if (i < 0 || i >= faderCount)
+        return -1;
+    if (std::abs (layoutPos.x - (faderX0 + i * faderPitch)) > faderPitch * 0.5f)
+        return -1;
+    return i;
+}
+
+void EnsoniqSD1AudioProcessorEditor::setFaderFromY (int idx, float layoutY)
+{
+    if (idx < 0 || idx >= faderCount)
+        return;
+    float v = 1.0f - (layoutY - faderY0) / (faderH - faderCapH);
+    v = juce::jlimit (0.0f, 1.0f, v);
+    faderValues[idx] = v;
+    audioProcessor.instrumentLevel[idx].store (v, std::memory_order_relaxed);
+    repaint();
+}
+
 void EnsoniqSD1AudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 {
-    const int idx = buttonIndexAt (layoutFromEditor (e.getPosition()));
+    const juce::Point<float> lp = layoutFromEditor (e.getPosition());
+
+    // Faders take priority over buttons in the INSTRUMENT LEVEL strip.
+    const int fader = faderIndexAt (lp);
+    if (fader >= 0)
+    {
+        activeFader = fader;
+        setFaderFromY (fader, lp.y);
+        return;
+    }
+
+    const int idx = buttonIndexAt (lp);
     if (idx >= 0 && idx < static_cast<int> (audioProcessor.buttonParams.size()))
     {
         // Momentary press: release anything held, then press the hit button.
@@ -405,7 +471,15 @@ void EnsoniqSD1AudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 
 void EnsoniqSD1AudioProcessorEditor::mouseDrag (const juce::MouseEvent& e)
 {
-    const int idx = buttonIndexAt (layoutFromEditor (e.getPosition()));
+    const juce::Point<float> lp = layoutFromEditor (e.getPosition());
+
+    if (activeFader >= 0)
+    {
+        setFaderFromY (activeFader, lp.y);
+        return;
+    }
+
+    const int idx = buttonIndexAt (lp);
     if (idx != pressedButtonIndex)
     {
         if (pressedButtonIndex >= 0 && pressedButtonIndex < static_cast<int> (audioProcessor.buttonParams.size()))
@@ -422,6 +496,7 @@ void EnsoniqSD1AudioProcessorEditor::mouseDrag (const juce::MouseEvent& e)
 
 void EnsoniqSD1AudioProcessorEditor::mouseUp (const juce::MouseEvent&)
 {
+    activeFader = -1;
     if (pressedButtonIndex >= 0 && pressedButtonIndex < static_cast<int> (audioProcessor.buttonParams.size()))
         audioProcessor.buttonParams[static_cast<size_t> (pressedButtonIndex)]->store (0.0f, std::memory_order_release);
     pressedButtonIndex = -1;

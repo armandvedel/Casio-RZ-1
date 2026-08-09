@@ -38,8 +38,16 @@ private:
     // Returns the rz1Buttons index under the given layout point, or -1.
     int buttonIndexAt (juce::Point<float> layoutPos) const;
 
+    // Instrument level faders (10 drum voices) in the INSTRUMENT LEVEL strip.
+    int faderIndexAt (juce::Point<float> layoutPos) const;
+    void setFaderFromY (int idx, float layoutY);
+
     // Currently mouse-pressed button index (for highlight + release tracking)
     int pressedButtonIndex = -1;
+
+    // Fader values (0..1, default full) and which fader is being dragged.
+    float faderValues[10] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+    int activeFader = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EnsoniqSD1AudioProcessorEditor)
 };

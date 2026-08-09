@@ -68,6 +68,11 @@ public:
         // layout rasterization (screenBuffers) can be skipped entirely.
         std::atomic<bool> nativePanel{ false };
 
+        // Instrument level faders (10 drum voices, 0..1). Written by the editor
+        // (UI thread), read by pushAudioFromMame (MAME/audio thread). Default
+        // is full level so sound is unchanged until a fader is moved.
+        std::atomic<float> instrumentLevel[10];
+
         // MAME callback function triggered whenever a hardware output changes
         static void mameOutputNotifier(const char *outname, s32 value, void *param);
         
