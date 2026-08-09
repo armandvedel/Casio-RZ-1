@@ -512,6 +512,7 @@ private:
     struct TimestampedMidi {
         uint8_t data;
         double targetMameTime;
+        bool consumed = false; // time-ordered delivery: bytes may be consumed out of FIFO order
     };
 
     static constexpr int MIDI_BUFFER_SIZE = 524288;
