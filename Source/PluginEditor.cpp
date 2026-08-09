@@ -173,7 +173,7 @@ void drawPanelText (juce::Graphics& g, const PanelText& t)
     // matches "TOM 2" and "SONG" matches "PATTERN". The width clamp only
     // shrinks genuinely long words in very narrow boxes; it never clips.
     // The global scale keeps every label comfortably inside its bounds.
-    constexpr float labelSizeScale = 0.8f;
+    constexpr float labelSizeScale = 0.72f;
     float fh = t.h * 1.35f * labelSizeScale;
     if (n > 1)
         fh = juce::jmin (fh, t.w * 3.0f / n);
