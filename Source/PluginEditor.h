@@ -46,7 +46,8 @@ private:
     int pressedButtonIndex = -1;
 
     // Fader values (0..1, default full) and which fader is being dragged.
-    float faderValues[10] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+    // 0-9 instruments, 10 sampling level (visual only), 11 overall volume.
+    float faderValues[12] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
     int activeFader = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EnsoniqSD1AudioProcessorEditor)

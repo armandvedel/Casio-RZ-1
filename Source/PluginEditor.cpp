@@ -54,17 +54,17 @@ const juce::Rectangle<int> sampleLabelStrips[] =
     { 662, 436, 46, 9 },   // SAMPLE 4
 };
 
-// Instrument level faders: 10 vertical sliders filling the horizontal space
-// ABOVE the "INSTRUMENT LEVEL" label, up near the top of the window (between
-// the top bar and the label), with the instrument name labelled below each
-// fader.
-constexpr int    faderCount  = 10;
-// Fader x-centers align with the "1..10" digits on the teal strip above.
+// Faders filling the horizontal space above the section labels: 10 evenly
+// spaced instrument faders (x 53..431), a sampling level fader under the
+// SAMPLING/LEVEL area (x 530) and an overall volume fader under VOLUME (x 588).
+// They start below the top bar AND the sampling LED, so they are a bit shorter.
+constexpr int    faderCount  = 12;
 constexpr float  faderCenters[faderCount] =
-    { 70.5f, 108.5f, 144.5f, 184.5f, 222.5f, 260.5f, 297.5f, 335.5f, 374.5f, 412.0f };
+    { 53.0f, 95.0f, 137.0f, 179.0f, 221.0f, 263.0f, 305.0f, 347.0f, 389.0f, 431.0f,
+      530.0f, 588.0f };
 constexpr float  faderHalfCell = 19.0f;
-constexpr float  faderY0     = 30.0f;  // below the top bar
-constexpr float  faderH      = 109.0f; // ~15% shorter: y 30..139
+constexpr float  faderY0     = 42.0f;  // below the top bar and the sampling LED
+constexpr float  faderH      = 97.0f;  // y 42..139 (shorter, clear of the LED)
 constexpr float  faderSlotW  = 30.0f;
 constexpr float  faderCapH   = 12.0f;
 constexpr float  faderLabelY = faderY0 + faderH + 2.0f; // 141, below the fader
@@ -77,6 +77,7 @@ const FaderLabel faderLabels[faderCount] =
     { "TOM 1", nullptr }, { "TOM 2", nullptr }, { "TOM 3", nullptr }, { "B D", nullptr },
     { "RIM/SD", nullptr }, { "HIHAT", nullptr }, { "CLAPS", "RIDE" },
     { "COWBELL", "CRASH" }, { "SAMPLE", "1/2" }, { "SAMPLE", "3/4" },
+    { "SAMPLING", nullptr }, { "VOLUME", nullptr },
 };
 
 // All text elements (auto-generated from rz1.lay: position, string, color).
@@ -95,10 +96,7 @@ const PanelText panelTexts[] =
     { 623, 46, 141, 31, "CASIO", panelWhite },
     { 607, 123, 184, 9, "DIGITAL SAMPLING RHYTHM COMPOSER", panelTeal },
     { 665, 134, 59, 24, "RZ-1", panelTeal },
-    { 502, 160, 56, 7, "SAMPLING", panelWhite },
     { 53, 168, 378, 7, "INSTRUMENT LEVEL", panelWhite },
-    { 502, 168, 56, 7, "LEVEL", panelWhite },
-    { 560, 168, 56, 7, "VOLUME", panelWhite },
     { 518, 226, 14, 7, "1/32", panelWhite },
     { 555, 226, 14, 7, "1/48", panelWhite },
     { 592, 226, 14, 7, "1/96", panelWhite },
@@ -481,7 +479,11 @@ void EnsoniqSD1AudioProcessorEditor::setFaderFromY (int idx, float layoutY)
     float v = 1.0f - (layoutY - faderY0) / travel;
     v = juce::jlimit (0.0f, 1.0f, v);
     faderValues[idx] = v;
-    audioProcessor.instrumentLevel[idx].store (v, std::memory_order_relaxed);
+    if (idx >= 0 && idx < 10)
+        audioProcessor.instrumentLevel[idx].store (v, std::memory_order_relaxed);
+    else if (idx == 11)
+        audioProcessor.masterVolume.store (v, std::memory_order_relaxed);
+    // idx 10 (sampling level) is visual only — the emulation has no sampling input.
     repaint();
 }
 

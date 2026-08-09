@@ -165,7 +165,7 @@ void EnsoniqSD1AudioProcessor::pushAudioFromMame(const int16_t* pcmBuffer, int n
         for (int ch = 0; ch < RZ1_DRUM_CHANNELS; ++ch)
             mix += (frame[ch] / 32768.0f) * faderGain[ch];
 
-        mix *= RZ1_MIX_SCALE;
+        mix *= RZ1_MIX_SCALE * masterVolume.load(std::memory_order_relaxed);
         mix = (mix > 1.0f) ? 1.0f : ((mix < -1.0f) ? -1.0f : mix);
 
         int index = currentWritePos & (RING_BUFFER_SIZE - 1);
@@ -1533,6 +1533,7 @@ EnsoniqSD1AudioProcessor::EnsoniqSD1AudioProcessor()
     // the user moves one.
     for (int i = 0; i < 10; ++i)
         instrumentLevel[i].store(1.0f, std::memory_order_relaxed);
+    masterVolume.store(1.0f, std::memory_order_relaxed);
         
     // Build the VFD text dictionary from the ROM file
     buildVfdDictionary();
