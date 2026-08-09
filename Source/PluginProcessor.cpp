@@ -43,6 +43,8 @@
 #include "esqpanel.h"
 #include "frontend/mame/ui/ui.h"
 #include "osd/modules/lib/osdobj_common.h"
+#include "osd/modules/font/font_module.h"
+#include "osd/modules/osdmodule.h"
 #include "uiinput.h"
 #include "inputdev.h"
 #include "emuopts.h"
@@ -382,6 +384,14 @@ private:
     double hostSyncSetupBase = 0.0;
     bool hostSyncSetupStarted = false;
     bool hostSyncSetupDone = false;
+
+    // --- VECTOR FONT (CoreText) ---
+    // The plugin's minimal OSD skips osd_common_t::init_subsystems(), so the
+    // font module is never selected and MAME falls back to its compiled-in
+    // 23 px bitmap font (pixelated panel labels at larger window sizes).
+    // Lazily register + select the macOS CoreText font module instead.
+    std::unique_ptr<osd_module_manager> m_fontModule;
+    font_module *m_font = nullptr;
     
 public:
     
@@ -1093,7 +1103,27 @@ public:
     virtual void customize_input_type_list(std::vector<input_type_entry> &typelist) override { typelist.clear(); };
     virtual std::vector<ui::menu_item> get_slider_list() override { return {}; };
 
-    virtual osd_font::ptr font_alloc() override { return nullptr; };
+    virtual osd_font::ptr font_alloc() override
+    {
+        if (m_fontModule == nullptr)
+        {
+            m_fontModule = std::make_unique<osd_module_manager>();
+            extern const module_type FONT_OSX;
+            extern const module_type FONT_NONE;
+            m_fontModule->register_module(FONT_OSX);
+            m_fontModule->register_module(FONT_NONE);
+            try
+            {
+                m_font = &m_fontModule->select_module<font_module>(*this, options(), OSD_FONT_PROVIDER, "osx");
+            }
+            catch (...)
+            {
+                // Fall back to the compiled-in bitmap font rather than crash.
+                m_font = nullptr;
+            }
+        }
+        return m_font ? m_font->font_alloc() : nullptr;
+    };
     virtual bool get_font_families(std::string const &font_path, std::vector<std::pair<std::string, std::string> > &result) override { return false; };
     virtual bool execute_command(const char *command) override { return false; };
 

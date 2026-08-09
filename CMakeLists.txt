@@ -109,7 +109,9 @@ find_library(SDL2MAIN_LIBRARY SDL2main PATHS /opt/homebrew/lib REQUIRED NO_DEFAU
 find_library(SDL2_LIBRARY SDL2 PATHS /opt/homebrew/lib REQUIRED NO_DEFAULT_PATH)
 
 target_include_directories(CasioRZ1 PRIVATE ${SDL2_INCLUDE_DIR})
-target_link_libraries(CasioRZ1 PRIVATE ${SDL2MAIN_LIBRARY} ${SDL2_LIBRARY} "-framework OpenGL")
+target_link_libraries(CasioRZ1 PRIVATE ${SDL2MAIN_LIBRARY} ${SDL2_LIBRARY}
+    "-framework OpenGL"
+    "-framework ApplicationServices")
 
 set(MAME_PLUGINS_ZIP "${CMAKE_SOURCE_DIR}/Source/mame_plugins.zip")
 set(MAME_PLUGINS_DIR "${CMAKE_BINARY_DIR}/CasioRZ1_artefacts/$<CONFIG>/VST3/Casio RZ-1.vst3/Contents/Resources/plugins")
