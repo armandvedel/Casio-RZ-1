@@ -346,6 +346,7 @@ public:
     void clearMidiBuffer();
     bool pollMidiData();
     int readMidiByte();
+    int findDeliverableMidiByte(double now) const;
     
     // --- MIDI OUTPUT (from SD-1 DUART TX → JUCE MIDI out) ---
     static constexpr int MIDI_OUT_BUFFER_SIZE = 16384;
@@ -473,9 +474,13 @@ private:
     int getInternalHardwareLatencySamples() const {
         double sr = hostSampleRate.load(std::memory_order_relaxed);
         // Measured MIDI->audio round trip on the MAME side with the raised
-        // stream rate: delivery <= ~1 ms (4 kHz poll + serial) plus firmware
-        // and one audio quantum of generation delay — ~2 ms total.
-        return static_cast<int>(0.002 * sr);
+        // stream rate: delivery is <= ~1 ms (4 kHz poll), but the RZ-1's own
+        // firmware MIDI handling (UART parse + voice trigger) adds a variable
+        // 2.5-7.5 ms (mean ~4.5 ms, ~2 ms quantized; measured with the
+        // midi_latency harness on the BD voice across phase offsets). The host
+        // PDC compensates this reported value, so use the mean so hits land on
+        // the grid on average.
+        return static_cast<int>(0.0045 * sr);
     }
 
     // MAME's audio callback now delivers ~1 ms of audio per update (raised
@@ -520,6 +525,13 @@ private:
 
     std::atomic<int> midiWritePos{ 0 };
     std::atomic<int> midiReadPos{ 0 };
+
+    // Realtime-byte deferral (MAME-thread only): while a channel message is on
+    // the wire, clock bytes (FA/F8/FC) must not be emitted between its bytes —
+    // the RZ-1 firmware drops a note-on that follows a clock byte interleaved
+    // into the preceding note-off. midiRealtimeBlockUntil is the machine time
+    // until which realtime bytes are held back.
+    double midiRealtimeBlockUntil = -1.0;
 
     std::atomic<bool> newFrameAvailable{ false };
     

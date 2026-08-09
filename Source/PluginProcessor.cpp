@@ -262,6 +262,25 @@ void EnsoniqSD1AudioProcessor::pushMidiByte(uint8_t data, double targetMameTime)
         midiBuffer[currentWrite].consumed = false;
         midiWritePos.store(nextWrite, std::memory_order_release);
     }
+    else
+    {
+        // --- DROP DIAGNOSTIC ---
+        // The ring is full (read cursor held back by a not-yet-due head or a
+        // stalled consumer). Log the first few drops with the machine time at
+        // push so we can see when/why bytes are lost.
+        static std::atomic<int> dropWrites{ 0 };
+        if (dropWrites.fetch_add(1) < 200)
+        {
+            const double dropNow = (mameMachine != nullptr) ? mameMachine->time().as_double() : -1.0;
+            juce::File dropFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                .getChildFile("CasioRZ1").getChildFile("midi_drop_log.txt");
+            dropFile.appendText(juce::String("now=") + juce::String(dropNow, 6)
+                                + " target=" + juce::String(targetMameTime, 6)
+                                + " byte=0x" + juce::String::toHexString(data)
+                                + " wr=" + juce::String(currentWrite)
+                                + " rd=" + juce::String(midiReadPos.load(std::memory_order_acquire)) + "\n");
+        }
+    }
 }
 
 // ========================================================
@@ -344,6 +363,7 @@ void EnsoniqSD1AudioProcessor::forceCompareOff()
 void EnsoniqSD1AudioProcessor::clearMidiBuffer() {
     // Clear MIDI buffer
     midiReadPos.store(midiWritePos.load(std::memory_order_acquire), std::memory_order_release);
+    midiRealtimeBlockUntil = -1.0;
 }
 
 bool EnsoniqSD1AudioProcessor::pollMidiData() {
@@ -353,26 +373,55 @@ bool EnsoniqSD1AudioProcessor::pollMidiData() {
     int currentWrite = midiWritePos.load(std::memory_order_acquire);
     if (currentRead == currentWrite) return false;
 
+    double now = mameMachine->time().as_double();
+    return findDeliverableMidiByte(now) >= 0;
+}
+
+int EnsoniqSD1AudioProcessor::findDeliverableMidiByte(double now) const
+{
+    int currentRead = midiReadPos.load(std::memory_order_relaxed);
+    int currentWrite = midiWritePos.load(std::memory_order_acquire);
+    if (currentRead == currentWrite) return -1;
+
     // Time-ordered delivery: find the pending byte with the earliest target.
     // Bytes can be enqueued out of target order (processBlock pushes DAW notes
     // before the host-sync F8s even when the notes' targets are later), so a
     // strict FIFO head would head-of-line block the earlier-target byte behind
     // a later-target one and deliver it up to one F8 tick (~19 ms) late.
-    double now = mameMachine->time().as_double();
+    int best = -1;
     double bestTarget = 0.0;
-    bool found = false;
     for (int i = currentRead; i != currentWrite; i = (i + 1) & (MIDI_BUFFER_SIZE - 1))
     {
         if (midiBuffer[i].consumed) continue;
-        if (!found || midiBuffer[i].targetMameTime < bestTarget)
+        if (best < 0 || midiBuffer[i].targetMameTime < bestTarget)
         {
+            best = i;
             bestTarget = midiBuffer[i].targetMameTime;
-            found = true;
         }
     }
+    if (best < 0 || now < bestTarget) return -1;
 
-    // The MAME processor accurately waits for the calculated microsecond!
-    return found && now >= bestTarget;
+    // Realtime-byte deferral: a clock byte must not be emitted while a channel
+    // message is on the wire (the RZ-1 firmware drops the note-on that follows
+    // an F8 interleaved into a note-off). While blocked, deliver the earliest
+    // due channel byte instead so message traffic stays contiguous.
+    if (midiBuffer[best].data >= 0xF8 && now < midiRealtimeBlockUntil)
+    {
+        int alt = -1;
+        double altTarget = 0.0;
+        for (int i = currentRead; i != currentWrite; i = (i + 1) & (MIDI_BUFFER_SIZE - 1))
+        {
+            if (midiBuffer[i].consumed || midiBuffer[i].data >= 0xF8) continue;
+            if (alt < 0 || midiBuffer[i].targetMameTime < altTarget)
+            {
+                alt = i;
+                altTarget = midiBuffer[i].targetMameTime;
+            }
+        }
+        return (alt >= 0 && now >= altTarget) ? alt : -1;
+    }
+
+    return best;
 }
 
 int EnsoniqSD1AudioProcessor::readMidiByte() {
@@ -382,26 +431,22 @@ int EnsoniqSD1AudioProcessor::readMidiByte() {
     int currentWrite = midiWritePos.load(std::memory_order_acquire);
     if (currentRead == currentWrite) return 0;
 
-    // Same scan as pollMidiData: the earliest-target pending byte.
     double now = mameMachine->time().as_double();
-    int bestIndex = -1;
-    double bestTarget = 0.0;
-    bool found = false;
-    for (int i = currentRead; i != currentWrite; i = (i + 1) & (MIDI_BUFFER_SIZE - 1))
-    {
-        if (midiBuffer[i].consumed) continue;
-        if (!found || midiBuffer[i].targetMameTime < bestTarget)
-        {
-            bestTarget = midiBuffer[i].targetMameTime;
-            bestIndex = i;
-            found = true;
-        }
-    }
-    if (!found || now < bestTarget) return 0;
+    int bestIndex = findDeliverableMidiByte(now);
+    if (bestIndex < 0) return 0;
+    const double bestTarget = midiBuffer[bestIndex].targetMameTime;
 
     {
         uint8_t data = midiBuffer[bestIndex].data;
         midiBuffer[bestIndex].consumed = true;
+
+        // Keep realtime bytes out of an in-flight channel message: the serial
+        // wire takes ~0.32 ms per byte, so a message is "on the wire" for
+        // ~0.96 ms from its status byte (status + 2 data bytes).
+        if (data >= 0x80 && data < 0xF8)
+            midiRealtimeBlockUntil = std::max(midiRealtimeBlockUntil, now + 3 * 0.00032);
+        else if (data < 0x80)
+            midiRealtimeBlockUntil = std::max(midiRealtimeBlockUntil, now + 0.00032);
 
         // Reclaim the read cursor past leading consumed slots (keeps the ring
         // buffer's free space accurate even though bytes are consumed out of
