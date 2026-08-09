@@ -341,6 +341,21 @@ public:
     void pushAudioFromMame(const int16_t* pcmBuffer, int numSamples);
 
     // ========================================================
+    // SAMPLING AUDIO INPUT (DAW -> MAME mic path)
+    // ========================================================
+    // Mono mix of the DAW input bus, keyed by absolute DAW sample position.
+    // Written by the audio thread in processBlock; read by the OSD's
+    // sound_stream_source_update on the MAME thread via the anchor mapping
+    // (same t_anchor/s_anchor atomics the MIDI scheduler uses).
+    static constexpr int INPUT_RING_SIZE = 65536;
+    float inputRing[INPUT_RING_SIZE] = { 0.0f };
+    std::atomic<uint64_t> inputWritePos{ 0 };
+
+    double getAnchorMameTime() const { return anchorMameTime.load(std::memory_order_relaxed); }
+    uint64_t getAnchorDawSample() const { return anchorDawSample.load(std::memory_order_relaxed); }
+    bool isAnchorPending() const { return needAnchorSync.load(std::memory_order_acquire); }
+
+    // ========================================================
     // MIDI INPUT HANDLING (JUCE -> MAME)
     // ========================================================
     void pushMidiByte(uint8_t data, double targetMameTime);

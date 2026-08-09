@@ -677,6 +677,11 @@ private:
     double hostSyncSetupBase = 0.0;
     bool hostSyncSetupStarted = false;
     bool hostSyncSetupDone = false;
+
+    // --- SAMPLING INPUT FEED (MAME-thread state) ---
+    double inputStreamPos = 0.0;   // next source-rate sample index to fill
+    double inputOffset = 0.0;      // dawSample = inputStreamPos + inputOffset
+    bool inputOffsetValid = false;
     
 public:
     
@@ -1395,10 +1400,13 @@ public:
         // Force MAME to generate audio at the exact sample rate required by the DAW host.
         node.m_rate = { static_cast<uint32_t>(processor->getHostSampleRate()) };
         node.m_sinks = 1;
-        node.m_sources = 0;
+        node.m_sources = 1;
+        node.m_port_names.push_back("input");
+        node.m_port_positions.emplace_back(osd::channel_position::FC());
         
         info.m_nodes.push_back(node);
         info.m_default_sink = 1;
+        info.m_default_source = 1;
         info.m_generation = 1;
         
         return info;
@@ -1413,10 +1421,54 @@ public:
         }
     };
     
-    virtual uint32_t sound_stream_source_open(uint32_t node, std::string name, uint32_t rate) override { return 0; };
+    virtual uint32_t sound_stream_source_open(uint32_t node, std::string name, uint32_t rate) override { return 1; };
     virtual uint32_t sound_get_generation() override { return 1; };
     
-    virtual void sound_stream_source_update(uint32_t id, int16_t *buffer, int samples_this_frame) override {};
+    virtual void sound_stream_source_update(uint32_t id, int16_t *buffer, int samples_this_frame) override
+    {
+        if (processor == nullptr || samples_this_frame <= 0)
+            return;
+
+        // No anchor yet (MAME still booting / transport not started): feed silence.
+        if (processor->isAnchorPending())
+        {
+            for (int i = 0; i < samples_this_frame; ++i)
+                buffer[i] = 0;
+            inputStreamPos += samples_this_frame;
+            return;
+        }
+
+        const double tAnchor = processor->getAnchorMameTime();
+        const uint64_t sAnchor = processor->getAnchorDawSample();
+        const double sr = processor->getHostSampleRate();
+        const double offset = static_cast<double>(sAnchor) - tAnchor * sr;
+
+        // Keep the running position continuous across re-anchors: source sample k
+        // maps to DAW sample k + offset, so when the anchor moves we shift k by
+        // the offset delta rather than letting the timeline jump.
+        if (!inputOffsetValid)
+        {
+            inputOffset = offset;
+            inputOffsetValid = true;
+        }
+        else if (offset != inputOffset)
+        {
+            inputStreamPos += inputOffset - offset;
+            inputOffset = offset;
+        }
+
+        const uint64_t writeEnd = processor->inputWritePos.load(std::memory_order_acquire);
+        const int64_t dawStart = static_cast<int64_t>(inputStreamPos + inputOffset);
+        for (int i = 0; i < samples_this_frame; ++i)
+        {
+            int16_t v = 0;
+            const int64_t daw = dawStart + i;
+            if (daw >= 0 && static_cast<uint64_t>(daw) < writeEnd)
+                v = static_cast<int16_t>(processor->inputRing[static_cast<uint64_t>(daw) & (EnsoniqSD1AudioProcessor::INPUT_RING_SIZE - 1)] * 32767.0f);
+            buffer[i] = v;
+        }
+        inputStreamPos += samples_this_frame;
+    }
     virtual void sound_stream_set_volumes(uint32_t id, const std::vector<float> &db) override {};
     virtual void sound_begin_update() override {};
     virtual void sound_end_update() override {};
@@ -1654,6 +1706,7 @@ void EnsoniqSD1AudioProcessor::saveGlobalSettings()
 
 EnsoniqSD1AudioProcessor::EnsoniqSD1AudioProcessor()
      : AudioProcessor (BusesProperties()
+                       .withInput  ("Audio In", juce::AudioChannelSet::stereo(), true)
                        .withOutput ("Main Out", juce::AudioChannelSet::stereo(), true)
                        .withOutput ("Aux Out",  juce::AudioChannelSet::stereo(), false)
                        ),
@@ -2038,6 +2091,26 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     if (mameMachine == nullptr) {
         totalRead.store(currentReadPos + numSamples, std::memory_order_release);
         return;
+    }
+
+    // --- SAMPLING INPUT CAPTURE: DAW audio -> mono ring keyed by DAW sample ---
+    // Written on the audio thread; the OSD's sound_stream_source_update reads
+    // it on the MAME thread using the anchor mapping (same as MIDI scheduling).
+    if (totalNumInputChannels > 0 && numChannels > 0)
+    {
+        const float* inL = buffer.getReadPointer(0);
+        const float* inR = (totalNumInputChannels > 1) ? buffer.getReadPointer(1) : nullptr;
+        if (inL != nullptr)
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                float v = inL[i];
+                if (inR != nullptr)
+                    v = 0.5f * (v + inR[i]);
+                inputRing[(currentReadPos + static_cast<uint64_t>(i)) & (INPUT_RING_SIZE - 1)] = v;
+            }
+            inputWritePos.store(currentReadPos + static_cast<uint64_t>(numSamples), std::memory_order_release);
+        }
     }
     
     // ==========================================================
@@ -2555,10 +2628,13 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         
         // 3. PROTECTION: Safely retrieve write pointers based on the actual buffer dimensions!
         // If the DAW nullified the bus, getWritePointer will return nullptr.
-        auto* outL    = (numChannels > 0) ? buffer.getWritePointer(0) : nullptr;
-        auto* outR    = (numChannels > 1) ? buffer.getWritePointer(1) : nullptr;
-        auto* outAuxL = (numChannels > 2) ? buffer.getWritePointer(2) : nullptr;
-        auto* outAuxR = (numChannels > 3) ? buffer.getWritePointer(3) : nullptr;
+        // Input bus channels come first in the flattened buffer, so outputs
+        // start at totalNumInputChannels.
+        const int outBase = totalNumInputChannels;
+        auto* outL    = (numChannels > outBase + 0) ? buffer.getWritePointer(outBase + 0) : nullptr;
+        auto* outR    = (numChannels > outBase + 1) ? buffer.getWritePointer(outBase + 1) : nullptr;
+        auto* outAuxL = (numChannels > outBase + 2) ? buffer.getWritePointer(outBase + 2) : nullptr;
+        auto* outAuxR = (numChannels > outBase + 3) ? buffer.getWritePointer(outBase + 3) : nullptr;
         
         // Consume samples from the ring buffers
         for (int i = 0; i < samplesToProcess; ++i) {
