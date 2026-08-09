@@ -1173,11 +1173,6 @@ void upd7810_device::upd7810_sio_output()
 
 void upd7810_device::upd7810_sio_input()
 {
-	// TEMP SIO DIAGNOSTIC: trace sampling around the first bytes
-	if (machine().time().as_double() > 14.240 && machine().time().as_double() < 14.310)
-		std::fprintf(stderr, "[siotrace] t=%.5f rxcnt=%d rxs=%04x smh=%02x sml=%02x rxd=%d\n",
-					 machine().time().as_double(), m_rxcnt, m_rxs, SMH, SML,
-					 m_rxd_func() ? 1 : 0);
 	/* sample next bit? */
 	if (m_rxcnt > 0)
 	{
@@ -1312,11 +1307,6 @@ void upd7810_device::upd7810_sio_input()
 				RXB = m_rxs;
 //              m_rxcnt = 8;
 			}
-			// TEMP SIO DIAGNOSTIC
-			if (machine().time().as_double() > 13.5 && machine().time().as_double() < 17.0)
-				std::fprintf(stderr, "[sio] t=%.4f rx=%02x smh=%02x sml=%02x inter=%d\n",
-							 machine().time().as_double(), RXB, SMH, SML,
-							 (IRR & INTER) ? 1 : 0);
 		}
 	}
 	else
