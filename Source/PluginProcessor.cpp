@@ -2006,7 +2006,16 @@ bool EnsoniqSD1AudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
 
-    // 2. Aux Out must be stereo ONLY IF the user explicitly enables it in the DAW
+    // 2. Audio In may be stereo, mono, or disabled (hosts differ wildly on how
+    //    they present instrument inputs — Logic compacts the buffer to
+    //    max(inputs, outputs), VST3 hosts usually pass the full channel count).
+    auto inBus = layouts.getChannelSet(true, 0);
+    if (inBus != juce::AudioChannelSet::stereo()
+        && inBus != juce::AudioChannelSet::mono()
+        && inBus != juce::AudioChannelSet::disabled())
+        return false;
+
+    // 3. Aux Out must be stereo ONLY IF the user explicitly enables it in the DAW
     auto auxBus = layouts.getChannelSet(false, 1);
     if (auxBus != juce::AudioChannelSet::disabled() && auxBus != juce::AudioChannelSet::stereo())
         return false;
@@ -2096,20 +2105,25 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     // --- SAMPLING INPUT CAPTURE: DAW audio -> mono ring keyed by DAW sample ---
     // Written on the audio thread; the OSD's sound_stream_source_update reads
     // it on the MAME thread using the anchor mapping (same as MIDI scheduling).
-    if (totalNumInputChannels > 0 && numChannels > 0)
+    if (totalNumInputChannels > 0)
     {
-        const float* inL = buffer.getReadPointer(0);
-        const float* inR = (totalNumInputChannels > 1) ? buffer.getReadPointer(1) : nullptr;
-        if (inL != nullptr)
+        auto inputBusBuffer = getBusBuffer(buffer, true, 0);
+        const int inCh = inputBusBuffer.getNumChannels();
+        if (inCh > 0)
         {
-            for (int i = 0; i < numSamples; ++i)
+            const float* inL = inputBusBuffer.getReadPointer(0);
+            const float* inR = inCh > 1 ? inputBusBuffer.getReadPointer(1) : nullptr;
+            if (inL != nullptr)
             {
-                float v = inL[i];
-                if (inR != nullptr)
-                    v = 0.5f * (v + inR[i]);
-                inputRing[(currentReadPos + static_cast<uint64_t>(i)) & (INPUT_RING_SIZE - 1)] = v;
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    float v = inL[i];
+                    if (inR != nullptr)
+                        v = 0.5f * (v + inR[i]);
+                    inputRing[(currentReadPos + static_cast<uint64_t>(i)) & (INPUT_RING_SIZE - 1)] = v;
+                }
+                inputWritePos.store(currentReadPos + static_cast<uint64_t>(numSamples), std::memory_order_release);
             }
-            inputWritePos.store(currentReadPos + static_cast<uint64_t>(numSamples), std::memory_order_release);
         }
     }
     
@@ -2628,13 +2642,17 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         
         // 3. PROTECTION: Safely retrieve write pointers based on the actual buffer dimensions!
         // If the DAW nullified the bus, getWritePointer will return nullptr.
-        // Input bus channels come first in the flattened buffer, so outputs
-        // start at totalNumInputChannels.
-        const int outBase = totalNumInputChannels;
-        auto* outL    = (numChannels > outBase + 0) ? buffer.getWritePointer(outBase + 0) : nullptr;
-        auto* outR    = (numChannels > outBase + 1) ? buffer.getWritePointer(outBase + 1) : nullptr;
-        auto* outAuxL = (numChannels > outBase + 2) ? buffer.getWritePointer(outBase + 2) : nullptr;
-        auto* outAuxR = (numChannels > outBase + 3) ? buffer.getWritePointer(outBase + 3) : nullptr;
+        // Use the bus API: JUCE's processBlock buffer is laid out with input
+        // channels first, and outputs share the buffer when they overlap (the
+        // AU wrapper compacts to max(inputs, outputs) — e.g. with 2 in / 4 out
+        // the input shares channels 0/1 with Main Out). getBusBuffer resolves
+        // the correct channels for every wrapper/host combination.
+        auto mainOut = getBusBuffer(buffer, false, 0);
+        auto auxOut  = getBusBuffer(buffer, false, 1);
+        auto* outL    = mainOut.getNumChannels() > 0 ? mainOut.getWritePointer(0) : nullptr;
+        auto* outR    = mainOut.getNumChannels() > 1 ? mainOut.getWritePointer(1) : nullptr;
+        auto* outAuxL = auxOut.getNumChannels() > 0 ? auxOut.getWritePointer(0) : nullptr;
+        auto* outAuxR = auxOut.getNumChannels() > 1 ? auxOut.getWritePointer(1) : nullptr;
         
         // Consume samples from the ring buffers
         for (int i = 0; i < samplesToProcess; ++i) {
