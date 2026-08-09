@@ -355,6 +355,10 @@ public:
     uint64_t getAnchorDawSample() const { return anchorDawSample.load(std::memory_order_relaxed); }
     bool isAnchorPending() const { return needAnchorSync.load(std::memory_order_acquire); }
 
+    // Direct boot-stage diagnostics (appended to mame_boot_log.txt regardless
+    // of whether MAME's OSD update ever runs, so a stalled boot is traceable).
+    void appendBootLog(const juce::String& line);
+
     // ========================================================
     // MIDI INPUT HANDLING (JUCE -> MAME)
     // ========================================================

@@ -195,6 +195,14 @@ void EnsoniqSD1AudioProcessor::pushAudioFromMame(const int16_t* pcmBuffer, int n
     }
 
 }
+
+void EnsoniqSD1AudioProcessor::appendBootLog(const juce::String& line)
+{
+    std::lock_guard<std::mutex> lock(debugLogMutex);
+    juce::File logFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+        .getChildFile("CasioRZ1").getChildFile("mame_boot_log.txt");
+    logFile.appendText("boot name=" + getName() + " " + line + "\n");
+}
     
 // ==============================================================================
 // VST MIDI PORT IMPLEMENTATION (TIMESTAMPED)
@@ -761,6 +769,7 @@ public:
             std::lock_guard<std::mutex> lock(processor->debugLogMutex);
             processor->debugInitLog = "[DEBUG] VstOsdInterface::init() called\n";
         }
+        processor->appendBootLog("osd init entered");
               
         mame_machine = &machine;
         processor->mameMachine = &machine;
@@ -1962,6 +1971,7 @@ void EnsoniqSD1AudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
                         // performs, so validation hangs and hosts (Logic) keep stale component
                         // registrations (e.g. an old aumu type after switching to aumf).
                         if (hostPath.contains("scanner") || hostPath.contains("validator") || hostPath.contains("auval")) {
+                            appendBootLog("SKIP boot (hostPath=" + hostPath + ")");
                             isMameRunning = false;
                             return;
                         }
@@ -3357,6 +3367,8 @@ bool EnsoniqSD1AudioProcessor::runSelfCheck()
 
 void EnsoniqSD1AudioProcessor::checkRomAndBootMame()
 {
+    appendBootLog("checkRomAndBootMame entered");
+
     // --- 0. LEGACY FALLBACK (For existing users) ---
     // Check if the old 'rz1.zip' exists in the base folder and migrate it
         juce::File baseDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("CasioRZ1");
@@ -3380,6 +3392,7 @@ void EnsoniqSD1AudioProcessor::checkRomAndBootMame()
 
     // 2. Verify the unzipped files in ROMs/rz1
     if (!verifyRomFiles()) {
+        appendBootLog("ROM verify failed: " + missingFilesList);
         isRomMissing.store(true, std::memory_order_release);
         isRomInvalid.store(true, std::memory_order_release);
         isMameRunning = false;
@@ -3389,6 +3402,8 @@ void EnsoniqSD1AudioProcessor::checkRomAndBootMame()
         isRomInvalid.store(false, std::memory_order_release);
         lastRomError.clear();
         isMameRunning = true;
+
+        appendBootLog("starting mame thread");
         
         // Safety net against std::terminate if thread wasn't joined
         if (mameThread.joinable()) {
@@ -3574,6 +3589,8 @@ void EnsoniqSD1AudioProcessor::mameOutputNotifier(const char *outname, s32 value
 
 void EnsoniqSD1AudioProcessor::runMameEngine()
 {
+    appendBootLog("mame thread entered");
+
 #ifdef _WIN32
     DWORD taskIndex = 0;
     HANDLE hTask = AvSetMmThreadCharacteristicsA("Pro Audio", &taskIndex);
@@ -3742,6 +3759,8 @@ void EnsoniqSD1AudioProcessor::runMameEngine()
     auto* headlessOsd = new VstOsdInterface(this, *mameOpts);
     mameOsd = headlessOsd;  // Store OSD pointer to keep it alive
     auto* frontend = new cli_frontend(*mameOpts, *headlessOsd);
+
+    appendBootLog("executing mame frontend");
     
     const int rc = frontend->execute(args);
     
