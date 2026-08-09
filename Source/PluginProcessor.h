@@ -95,6 +95,7 @@ public:
     // Audio-thread-only state (touched solely from processBlock):
     bool hostSyncLastPlaying = false;
     int64_t hostSyncLastTick = -1;
+    double hostSyncLastPpq = -1.0;  // playhead ppq from the previous block (loop-wrap detection)
     bool hostSyncFaSent = false;
     
     // --- DEBUG: Primitive counter for GUI detection ---

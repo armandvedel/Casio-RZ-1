@@ -2243,6 +2243,15 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
                     const uint8_t* rawData = msg.getRawData();
                     for (int i = 0; i < msg.getRawDataSize(); ++i) {
+
+                        // Host sync owns the clock: drop any realtime clock
+                        // bytes the DAW itself sends (Logic can emit FC/FA at
+                        // loop boundaries; forwarding them would stop/restart
+                        // the RZ-1, and forwarded F8s would double its rate).
+                        const uint8_t b = rawData[i];
+                        if (hostSyncEnabled.load(std::memory_order_relaxed)
+                            && (b == 0xF8 || b == 0xFA || b == 0xFB || b == 0xFC))
+                            continue;
                         
                         // FIX: Prevent 0-cycle UART Overrun!
                         // If queued events calculate to the past, clamp them to the present so the virtual CPU can read them.
@@ -2251,7 +2260,7 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                         if (targetMameTime < lastAuMidiTime + 0.00032) {
                             targetMameTime = lastAuMidiTime + 0.00032;
                         }
-                        pushMidiByte(rawData[i], targetMameTime);
+                        pushMidiByte(b, targetMameTime);
                         lastAuMidiTime = targetMameTime;
                     }
                 }
@@ -2280,6 +2289,11 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
                 const uint8_t* rawData = msg.getRawData();
                 for (int i = 0; i < msg.getRawDataSize(); ++i) {
+
+                    const uint8_t b = rawData[i];
+                    if (hostSyncEnabled.load(std::memory_order_relaxed)
+                        && (b == 0xF8 || b == 0xFA || b == 0xFB || b == 0xFC))
+                        continue;
                     
                     // FIX: Prevent 0-cycle UART Overrun!
                     if (targetMameTime < currentMameTime) targetMameTime = currentMameTime;
@@ -2287,7 +2301,7 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                     if (targetMameTime < lastAuMidiTime + 0.00032) {
                         targetMameTime = lastAuMidiTime + 0.00032;
                     }
-                    pushMidiByte(rawData[i], targetMameTime);
+                    pushMidiByte(b, targetMameTime);
                     lastAuMidiTime = targetMameTime;
                 }
             }
@@ -2335,7 +2349,13 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
                 const uint8_t* rawData = msg.getRawData();
                 for (int i = 0; i < msg.getRawDataSize(); ++i)
-                    pushMidiByte(rawData[i], targetMameTime);
+                {
+                    const uint8_t b = rawData[i];
+                    if (hostSyncEnabled.load(std::memory_order_relaxed)
+                        && (b == 0xF8 || b == 0xFA || b == 0xFB || b == 0xFC))
+                        continue;
+                    pushMidiByte(b, targetMameTime);
+                }
             }
         }
     
@@ -2392,6 +2412,20 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                 hostSyncLastTick = -1;
             }
             hostSyncLastPlaying = isPlaying;
+
+            // Loop wrap: the playhead jumped backward while the transport is
+            // still playing (DAW looping). The F8 tick counter would otherwise
+            // keep waiting for the pre-wrap tick and stall for an entire loop
+            // cycle; with no clock the RZ-1 freezes at the end of its pattern.
+            // (Verified headlessly: the RZ-1 resumes stepping on F8 alone, no
+            // FA needed.)
+            if (havePpq && isPlaying && hostSyncFaSent && hostSyncLastPpq >= 0.0
+                && ppq < hostSyncLastPpq - 0.25)
+            {
+                hostSyncLastTick = static_cast<int64_t>(std::floor(ppq * 24.0)) - 1;
+            }
+            if (havePpq)
+                hostSyncLastPpq = ppq;
 
             // F8 ticks while playing; each tick k sits at ppq = k/24
             if (isPlaying && hostSyncFaSent)
