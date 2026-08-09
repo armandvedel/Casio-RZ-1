@@ -171,16 +171,20 @@ void drawPanelText (juce::Graphics& g, const PanelText& t)
     const int n = static_cast<int> (std::strlen (t.text));
     // All labels of the same height render at the same size so, e.g., "B D"
     // matches "TOM 2" and "SONG" matches "PATTERN". The width clamp only
-    // shrinks genuinely long words in narrow boxes, and the floor keeps short
-    // labels (B D / S D / NO / YES) from getting lost.
-    float fh = t.h * 1.3f;
+    // shrinks genuinely long words in very narrow boxes; it never clips.
+    float fh = t.h * 1.35f;
     if (n > 1)
-        fh = juce::jmax (t.h * 0.9f, juce::jmin (fh, t.w * 2.2f / n));
+        fh = juce::jmin (fh, t.w * 3.0f / n);
     fh = juce::jmax (4.0f, fh);
 
     g.setFont (juce::FontOptions().withName ("Verdana").withHeight (fh).withStyle ("Bold"));
     g.setColour (t.colour);
-    g.drawText (juce::String (t.text), t.x - 4, t.y - 1, t.w + 8, t.h + 2,
+    // Generous draw rect centered on the box so the (possibly larger) glyphs
+    // are never clipped vertically or horizontally.
+    const float rectW = t.w + 16.0f;
+    const float rectH = fh + 6.0f;
+    g.drawText (juce::String (t.text),
+                t.x - 8.0f, t.y + (t.h - rectH) * 0.5f, rectW, rectH,
                 juce::Justification::centred, false);
 }
 
