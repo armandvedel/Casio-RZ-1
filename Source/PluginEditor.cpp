@@ -35,9 +35,7 @@ const juce::Rectangle<int> tealBarRects[] =
     { 167, 15, 36, 10 }, { 205, 15, 36, 10 }, { 243, 15, 36, 10 }, { 281, 15, 36, 10 },
     { 319, 15, 36, 10 }, { 357, 15, 36, 10 }, { 395, 15, 36, 10 }, { 433, 15, 67, 10 },
     { 502, 15, 56, 10 }, { 560, 15, 56, 10 }, { 618, 15, 160, 10 },
-    // The INSTRUMENT LEVEL underline closes the fader strip (the LEVEL/VOLUME
-    // underlines stay directly under their labels).
-    { 53, 250, 378, 1 }, { 502, 177, 56, 1 }, { 560, 177, 56, 1 },
+    { 53, 177, 378, 1 }, { 502, 177, 56, 1 }, { 560, 177, 56, 1 },
 };
 
 // White LCD bezel bars surrounding the 115x20 display.
@@ -56,17 +54,17 @@ const juce::Rectangle<int> sampleLabelStrips[] =
     { 662, 436, 46, 9 },   // SAMPLE 4
 };
 
-// Instrument level faders: 10 vertical sliders filling the INSTRUMENT LEVEL
-// strip — the entire horizontal space between the label and the closing teal
-// line — with the instrument name labelled inside the top of each slot.
+// Instrument level faders: 10 vertical sliders filling the horizontal space
+// ABOVE the "INSTRUMENT LEVEL" label, up near the top of the window (between
+// the top bar and the label), with the instrument name inside each slot.
 constexpr int    faderCount  = 10;
 constexpr float  faderX0     = 53.0f;
 constexpr float  faderPitch  = 37.8f;  // full strip width (53 .. ~431)
-constexpr float  faderY0     = 180.0f; // below the label, above the closing line
-constexpr float  faderH      = 68.0f;  // y 180..248, filling the allotted space
+constexpr float  faderY0     = 30.0f;  // below the top bar
+constexpr float  faderH      = 128.0f; // y 30..158, filling the space above the label
 constexpr float  faderSlotW  = 30.0f;
 constexpr float  faderCapH   = 12.0f;
-constexpr float  faderLabelY = 181.0f;
+constexpr float  faderLabelY = 32.0f;
 
 const char* const faderLabels[faderCount] =
 {
@@ -293,11 +291,11 @@ void EnsoniqSD1AudioProcessorEditor::drawPanel (juce::Graphics& g)
     for (const auto& r : tealBarRects)
         g.fillRect (r);
 
-    // Separator lines closing the instrument/fader section
+    // Separator lines below the instrument section
     g.setColour (juce::Colour (51, 51, 51));
-    g.fillRect (1, 252, 798, 1);
+    g.fillRect (1, 180, 798, 1);
     g.setColour (juce::Colours::black);
-    g.fillRect (1, 253, 798, 1);
+    g.fillRect (1, 181, 798, 1);
 
     // LCD bezel
     g.setColour (juce::Colour (211, 206, 193));
