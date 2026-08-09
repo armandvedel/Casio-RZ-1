@@ -1504,6 +1504,32 @@ void EnsoniqSD1AudioProcessor::loadGlobalSettings()
     settingsLock.exit();
 }
 
+void EnsoniqSD1AudioProcessor::saveGlobalSettings()
+{
+    juce::InterProcessLock settingsLock("CasioRZ1_Settings_Lock");
+    if (!settingsLock.enter(500)) return;  // another instance is writing
+
+    juce::File docsDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    juce::File settingsFile = docsDir.getChildFile("CasioRZ1").getChildFile("settings.xml");
+
+    // Preserve any existing fields (bookmarks, paths, ...) and just update the
+    // window size.
+    std::unique_ptr<juce::XmlElement> xml;
+    if (settingsFile.existsAsFile())
+        xml = juce::XmlDocument::parse(settingsFile);
+    if (!xml)
+        xml = std::make_unique<juce::XmlElement>("settings");
+
+    xml->setAttribute("window_width", savedWindowWidth);
+    xml->setAttribute("window_height", savedWindowHeight);
+
+    settingsFile.getParentDirectory().createDirectory();
+    if (settingsFile.create().ok())
+        settingsFile.replaceWithText(xml->toString());
+
+    settingsLock.exit();
+}
+
 EnsoniqSD1AudioProcessor::EnsoniqSD1AudioProcessor()
      : AudioProcessor (BusesProperties()
                        .withOutput ("Main Out", juce::AudioChannelSet::stereo(), true)

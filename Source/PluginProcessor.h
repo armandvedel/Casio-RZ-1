@@ -146,6 +146,7 @@ public:
     // --- GLOBAL SETTINGS ---
         std::atomic<bool> requestGlobalSave{ false };
         void loadGlobalSettings();
+        void saveGlobalSettings();
     
     // --- COMPARE STATE MANAGEMENT ---
     void forceCompareOff();

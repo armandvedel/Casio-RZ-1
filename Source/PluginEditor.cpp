@@ -247,13 +247,34 @@ EnsoniqSD1AudioProcessorEditor::EnsoniqSD1AudioProcessorEditor (EnsoniqSD1AudioP
     setOpaque (false);
     setPaintingIsUnclipped (true);
     setResizable (true, true);
-    setSize (1200, 802); // rz1.lay native view at 1.5x (labels read clearly)
     setResizeLimits (480, 321, 3840, 2568);
+
+    // Lock the panel aspect ratio (800:535) so resizing never creates extra
+    // space at the sides.
+    boundsConstrainer = std::make_unique<juce::ComponentBoundsConstrainer>();
+    boundsConstrainer->setFixedAspectRatio (800.0 / 535.0);
+    boundsConstrainer->setMinimumSize (480, 321);
+    boundsConstrainer->setMaximumSize (3840, 2568);
+    setConstrainer (boundsConstrainer.get());
+
+    // Restore the remembered window size (snapped to the locked aspect).
+    int w = audioProcessor.savedWindowWidth;
+    int h = audioProcessor.savedWindowHeight;
+    if (w <= 0 || h <= 0) { w = 1200; h = 802; }   // default: 1.5x native view
+    w = juce::jlimit (480, 3840, w);
+    h = juce::roundToInt (w * 535.0f / 800.0f);
+    h = juce::jlimit (321, 2568, h);
+    w = juce::roundToInt (h * 800.0f / 535.0f);
+    setSize (w, h);
+
     startTimerHz (30);
     audioProcessor.nativePanel.store (true, std::memory_order_release);
 }
 
-EnsoniqSD1AudioProcessorEditor::~EnsoniqSD1AudioProcessorEditor() = default;
+EnsoniqSD1AudioProcessorEditor::~EnsoniqSD1AudioProcessorEditor()
+{
+    audioProcessor.saveGlobalSettings();
+}
 
 void EnsoniqSD1AudioProcessorEditor::paint (juce::Graphics& g)
 {
@@ -401,6 +422,11 @@ void EnsoniqSD1AudioProcessorEditor::drawPanel (juce::Graphics& g)
 
 void EnsoniqSD1AudioProcessorEditor::resized()
 {
+    // Remember the window size for the next open (persisted on a debounce).
+    audioProcessor.savedWindowWidth = getWidth();
+    audioProcessor.savedWindowHeight = getHeight();
+    pendingSizeSave = true;
+
     // Keep MAME's render target in lockstep with the plugin window (same aspect as rz1.lay)
     if (getWidth() > 0 && getHeight() > 0)
     {
@@ -412,6 +438,16 @@ void EnsoniqSD1AudioProcessorEditor::resized()
 
 void EnsoniqSD1AudioProcessorEditor::timerCallback()
 {
+    if (pendingSizeSave)
+    {
+        const juce::uint32 now = juce::Time::getMillisecondCounter();
+        if (now - lastSizeSaveTime >= 1000)
+        {
+            pendingSizeSave = false;
+            lastSizeSaveTime = now;
+            audioProcessor.saveGlobalSettings();
+        }
+    }
     repaint();
 }
 

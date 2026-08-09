@@ -50,5 +50,12 @@ private:
     float faderValues[12] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
     int activeFader = -1;
 
+    // Locks the panel aspect ratio while resizing (no letterbox space).
+    std::unique_ptr<juce::ComponentBoundsConstrainer> boundsConstrainer;
+
+    // Debounced persistence of the window size (settings.xml).
+    bool pendingSizeSave = false;
+    juce::uint32 lastSizeSaveTime = 0;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EnsoniqSD1AudioProcessorEditor)
 };
