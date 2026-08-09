@@ -211,11 +211,14 @@ EnsoniqSD1AudioProcessorEditor::~EnsoniqSD1AudioProcessorEditor() = default;
 
 void EnsoniqSD1AudioProcessorEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colours::transparentBlack);
+    // Fill the whole window with the panel background so the artwork always
+    // matches the window, even if the host gives us a slightly different aspect.
+    g.fillAll (panelBg);
 
     // Native vector panel: scale the 800x535 layout space into the window so
     // the whole panel is drawn by JUCE at the display's resolution.
-    const float s = juce::jmin (getWidth() / layoutW, getHeight() / layoutH);
+    const float s = juce::jmin (getWidth() / static_cast<float> (layoutW),
+                                getHeight() / static_cast<float> (layoutH));
     const float ox = (getWidth() - layoutW * s) * 0.5f;
     const float oy = (getHeight() - layoutH * s) * 0.5f;
 
@@ -327,51 +330,24 @@ void EnsoniqSD1AudioProcessorEditor::timerCallback()
 
 juce::Point<float> EnsoniqSD1AudioProcessorEditor::layoutFromEditor (juce::Point<int> editorPos) const
 {
-    const int bufferIndex = audioProcessor.readyBufferIndex.load (std::memory_order_acquire);
-    const auto& screenBuffer = audioProcessor.screenBuffers[bufferIndex];
-    const float sw = static_cast<float> (juce::jmax (screenBuffer.getWidth(), 1));
-    const float sh = static_cast<float> (juce::jmax (screenBuffer.getHeight(), 1));
-    const float ew = static_cast<float> (juce::jmax (getWidth(), 1));
-    const float eh = static_cast<float> (juce::jmax (getHeight(), 1));
-
-    // Stage 1: editor -> screen buffer (inverse of drawImageWithin stretchToFit)
-    const float s1 = juce::jmin (ew / sw, eh / sh);
-    const float ox = (ew - sw * s1) * 0.5f;
-    const float oy = (eh - sh * s1) * 0.5f;
-    const float bx = (static_cast<float> (editorPos.x) - ox) / s1;
-    const float by = (static_cast<float> (editorPos.y) - oy) / s1;
-
-    // Stage 2: screen buffer -> layout space (MAME letterboxes the 800x535 view
-    // centered inside the target bounds, preserving aspect).
-    const float s2 = juce::jmin (sw / static_cast<float> (layoutW), sh / static_cast<float> (layoutH));
-    const float lx = (sw - static_cast<float> (layoutW) * s2) * 0.5f;
-    const float ly = (sh - static_cast<float> (layoutH) * s2) * 0.5f;
-
-    return { (bx - lx) / s2, (by - ly) / s2 };
+    // Inverse of the paint() transform: editor space -> 800x535 layout space.
+    // This must not depend on the (now unused) MAME screen buffers, which
+    // never resize once the native panel is active.
+    const float s = juce::jmin (getWidth() / static_cast<float> (layoutW),
+                                getHeight() / static_cast<float> (layoutH));
+    const float ox = (getWidth() - layoutW * s) * 0.5f;
+    const float oy = (getHeight() - layoutH * s) * 0.5f;
+    return { (static_cast<float> (editorPos.x) - ox) / s,
+             (static_cast<float> (editorPos.y) - oy) / s };
 }
 
 juce::Point<float> EnsoniqSD1AudioProcessorEditor::editorFromLayout (juce::Point<float> layoutPos) const
 {
-    const int bufferIndex = audioProcessor.readyBufferIndex.load (std::memory_order_acquire);
-    const auto& screenBuffer = audioProcessor.screenBuffers[bufferIndex];
-    const float sw = static_cast<float> (juce::jmax (screenBuffer.getWidth(), 1));
-    const float sh = static_cast<float> (juce::jmax (screenBuffer.getHeight(), 1));
-    const float ew = static_cast<float> (juce::jmax (getWidth(), 1));
-    const float eh = static_cast<float> (juce::jmax (getHeight(), 1));
-
-    // Stage 2 inverse
-    const float s2 = juce::jmin (sw / static_cast<float> (layoutW), sh / static_cast<float> (layoutH));
-    const float lx = (sw - static_cast<float> (layoutW) * s2) * 0.5f;
-    const float ly = (sh - static_cast<float> (layoutH) * s2) * 0.5f;
-    const float bx = layoutPos.x * s2 + lx;
-    const float by = layoutPos.y * s2 + ly;
-
-    // Stage 1 inverse
-    const float s1 = juce::jmin (ew / sw, eh / sh);
-    const float ox = (ew - sw * s1) * 0.5f;
-    const float oy = (eh - sh * s1) * 0.5f;
-
-    return { bx * s1 + ox, by * s1 + oy };
+    const float s = juce::jmin (getWidth() / static_cast<float> (layoutW),
+                                getHeight() / static_cast<float> (layoutH));
+    const float ox = (getWidth() - layoutW * s) * 0.5f;
+    const float oy = (getHeight() - layoutH * s) * 0.5f;
+    return { layoutPos.x * s + ox, layoutPos.y * s + oy };
 }
 
 int EnsoniqSD1AudioProcessorEditor::buttonIndexAt (juce::Point<float> layoutPos) const
