@@ -1403,12 +1403,14 @@ void EnsoniqSD1AudioProcessor::parameterChanged(const juce::String& parameterID,
                     mameBufferThreshold.store(newThreshold, std::memory_order_relaxed);
                     
                     if ((juce::MessageManager::getInstanceWithoutCreating() != nullptr && juce::MessageManager::getInstanceWithoutCreating()->isThisTheMessageThread())) {
-                        setLatencySamples(newThreshold + getInternalHardwareLatencySamples());
+                        setLatencySamples(newThreshold + getMidiLookaheadSamples()
+                                          + getInternalHardwareLatencySamples());
                     }
                     // NEW: AU audio-thread fallback
                     else if (wrapperType == juce::AudioProcessor::wrapperType_AudioUnit) {
                         juce::MessageManager::callAsync([this, newThreshold]() {
-                            setLatencySamples(newThreshold + getInternalHardwareLatencySamples());
+                            setLatencySamples(newThreshold + getMidiLookaheadSamples()
+                                              + getInternalHardwareLatencySamples());
                         });
                     }
                 }
@@ -1431,7 +1433,9 @@ void EnsoniqSD1AudioProcessor::parameterChanged(const juce::String& parameterID,
     
         // --- 2. AUTOMATION ---
         else {
-            uint64_t targetSample = totalRead.load(std::memory_order_acquire) + mameBufferThreshold.load(std::memory_order_relaxed);
+            uint64_t targetSample = totalRead.load(std::memory_order_acquire)
+                + mameBufferThreshold.load(std::memory_order_relaxed)
+                + static_cast<uint64_t>(getMidiLookaheadSamples());
             double sr = hostSampleRate.load(std::memory_order_relaxed);
             double t_anchor = anchorMameTime.load(std::memory_order_relaxed);
             uint64_t s_anchor = anchorDawSample.load(std::memory_order_relaxed);
@@ -1751,7 +1755,7 @@ void EnsoniqSD1AudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
         int currentThreshold = mameBufferThreshold.load(std::memory_order_relaxed);
         int hwLatency = getInternalHardwareLatencySamples();
         
-        setLatencySamples(currentThreshold + hwLatency);
+        setLatencySamples(currentThreshold + getMidiLookaheadSamples() + hwLatency);
     
         // Only boot MAME the very first time play is prepared
         if (!mameHasStarted.exchange(true)) {
@@ -2119,7 +2123,8 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                     auto msg = pending.first;
                     
                     uint64_t absoluteDawSample = captureReadPos + pending.second;
-                    uint64_t targetSample = absoluteDawSample + threshold;
+                    uint64_t targetSample = absoluteDawSample + threshold
+                        + static_cast<uint64_t>(getMidiLookaheadSamples());
                     
                     double targetMameTime = t_anchor + static_cast<double>(
                         static_cast<int64_t>(targetSample) - static_cast<int64_t>(s_anchor)) / sr;
@@ -2154,15 +2159,12 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                     if (!keep) continue;
                 }
 
-                double targetMameTime;
-
-                if (!isPlaying && !isOffline) {
-                    targetMameTime = currentMameTime + static_cast<double>(eventOffset) / sr;
-                } else {
-                    uint64_t targetSample = currentReadPos + eventOffset + threshold;
-                    targetMameTime = t_anchor + static_cast<double>(
-                        static_cast<int64_t>(targetSample) - static_cast<int64_t>(s_anchor)) / sr;
-                }
+                // Always schedule through the anchor mapping with the fixed
+                // lookahead (threshold + buffer margin) for deterministic timing.
+                const uint64_t targetSample = currentReadPos + static_cast<uint64_t>(eventOffset)
+                    + static_cast<uint64_t>(threshold) + static_cast<uint64_t>(getMidiLookaheadSamples());
+                double targetMameTime = t_anchor + static_cast<double>(
+                    static_cast<int64_t>(targetSample) - static_cast<int64_t>(s_anchor)) / sr;
 
                 const uint8_t* rawData = msg.getRawData();
                 for (int i = 0; i < msg.getRawDataSize(); ++i) {
@@ -2195,7 +2197,9 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
             //   block 1+ (maschineInFastRender confirmed by wait loop): effectiveThreshold=0
             // effectiveThreshold: 0 for Maschine render blocks, normal otherwise
             bool isMaschineRenderBlock = isMaschineHost && (justStartedPlaying || maschineInFastRender);
-            uint64_t effectiveThreshold = isMaschineRenderBlock ? 0u : static_cast<uint64_t>(threshold);
+            uint64_t effectiveThreshold = isMaschineRenderBlock
+                ? 0u
+                : static_cast<uint64_t>(threshold) + static_cast<uint64_t>(getMidiLookaheadSamples());
 
             double currentMameTimeVST = (mameMachine != nullptr) ? mameMachine->time().as_double() : 0.0;
 
@@ -2209,14 +2213,12 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                         continue;
                 }
 
-                double targetMameTime;
-                if (!isPlaying && !isOffline) {
-                    targetMameTime = currentMameTimeVST + static_cast<double>(eventOffset) / sr;
-                } else {
-                    uint64_t targetSample = currentReadPos + static_cast<uint64_t>(eventOffset) + effectiveThreshold;
-                    targetMameTime = t_anchor + static_cast<double>(
-                        static_cast<int64_t>(targetSample) - static_cast<int64_t>(s_anchor)) / sr;
-                }
+                // Always schedule through the anchor mapping with the fixed
+                // lookahead (threshold + buffer margin), so the target is in
+                // the future and the note lands at a deterministic DAW sample.
+                const uint64_t targetSample = currentReadPos + static_cast<uint64_t>(eventOffset) + effectiveThreshold;
+                double targetMameTime = t_anchor + static_cast<double>(
+                    static_cast<int64_t>(targetSample) - static_cast<int64_t>(s_anchor)) / sr;
                 if (targetMameTime < currentMameTimeVST) targetMameTime = currentMameTimeVST;
 
                 const uint8_t* rawData = msg.getRawData();
@@ -2252,7 +2254,8 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
             const double nowMame = mameMachine->time().as_double();
             const double ta = t_anchor;
             const uint64_t sa = s_anchor;
-            const uint64_t effThreshold = static_cast<uint64_t>(threshold);
+            const uint64_t effThreshold = static_cast<uint64_t>(threshold)
+                + static_cast<uint64_t>(getMidiLookaheadSamples());
 
             auto mameTimeForSample = [&](uint64_t sample) -> double
             {

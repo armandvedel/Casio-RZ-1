@@ -481,6 +481,18 @@ private:
         return static_cast<int>(0.0005 * sr);
     }
 
+    // MAME's audio callback delivers ~20 ms of audio per update (960 samples
+    // @ 48 kHz), so the emulator's lookahead over the DAW read position
+    // oscillates by up to one buffer. MIDI/F8 targets are scheduled this far
+    // past the nominal threshold so they are always in the future and are
+    // delivered at their exact time instead of being clamped to MAME-now
+    // (which landed notes at a random position inside the buffer — the
+    // "~1000 samples, quite random" timing error).
+    int getMidiLookaheadSamples() const {
+        double sr = hostSampleRate.load(std::memory_order_relaxed);
+        return static_cast<int>(0.023 * sr);   // 23 ms > 20 ms audio buffer
+    }
+
     // Audio Ring Buffers (Generously sized to prevent underruns)
     static constexpr int RING_BUFFER_SIZE = 65536;
 
