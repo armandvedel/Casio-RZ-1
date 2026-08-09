@@ -472,8 +472,13 @@ private:
                 
     int getInternalHardwareLatencySamples() const {
         double sr = hostSampleRate.load(std::memory_order_relaxed);
-                int base = static_cast<int>(0.0244 * sr);
-                return base;
+        // Measured MIDI->audio round trip on the MAME side: the midiin device
+        // polls at 1500 Hz (~0.33 ms avg), the 31250-baud serial byte adds
+        // ~0.3 ms, plus firmware trigger — ~0.5 ms total. The old 24.4 ms
+        // over-reported and made the RZ-1 sound ~4 ms early against the DAW
+        // grid. (The 960-sample audio-buffer offset is now handled by the
+        // anchor fix in pushAudioFromMame.)
+        return static_cast<int>(0.0005 * sr);
     }
 
     // Audio Ring Buffers (Generously sized to prevent underruns)

@@ -135,10 +135,16 @@ void EnsoniqSD1AudioProcessor::pushAudioFromMame(const int16_t* pcmBuffer, int n
     uint64_t currentWritePos = totalWritten.load(std::memory_order_relaxed);
         
     if (needAnchorSync.load(std::memory_order_acquire) && mameMachine != nullptr) {
-            anchorMameTime.store(mameMachine->time().as_double(), std::memory_order_relaxed);
-            anchorDawSample.store(currentWritePos, std::memory_order_relaxed);
-            needAnchorSync.store(false, std::memory_order_release);
-        }
+        // MAME's audio callback reports machine time at the END of the buffer
+        // (measured: 960 samples / 20 ms ahead of the first sample). Anchor the
+        // FIRST sample of the buffer to its actual time so the sample<->MAME
+        // time mapping is exact for MIDI scheduling.
+        const double sr = hostSampleRate.load(std::memory_order_relaxed);
+        anchorMameTime.store(mameMachine->time().as_double() - static_cast<double>(numSamples) / sr,
+                             std::memory_order_relaxed);
+        anchorDawSample.store(currentWritePos, std::memory_order_relaxed);
+        needAnchorSync.store(false, std::memory_order_release);
+    }
         
     // MAME outputs interleaved audio. RZ-1 STRIDE = 11, verified via the
     // standalone -wavwrite header (recipe §3 - the single most important
