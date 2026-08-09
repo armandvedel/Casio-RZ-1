@@ -455,6 +455,23 @@ int EnsoniqSD1AudioProcessor::readMidiByte() {
             currentRead = (currentRead + 1) & (MIDI_BUFFER_SIZE - 1);
         midiReadPos.store(currentRead, std::memory_order_release);
 
+        // --- READ DIAGNOSTIC (dropped-note hunt) ---
+        // Log every byte consumed from the queue so we can see whether a
+        // dropped hit's note-on bytes ever reached the emulated UART.
+        // Writes to ~/Documents/CasioRZ1/midi_read_log.txt.
+        {
+            static std::atomic<int> readWrites{ 0 };
+            if (readWrites.fetch_add(1) < 5000)
+            {
+                juce::File readFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                    .getChildFile("CasioRZ1").getChildFile("midi_read_log.txt");
+                readFile.appendText(juce::String("t=") + juce::String(now, 6)
+                                    + " target=" + juce::String(bestTarget, 6)
+                                    + " delta_ms=" + juce::String((now - bestTarget) * 1000.0, 2)
+                                    + " byte=0x" + juce::String::toHexString(data) + "\n");
+            }
+        }
+
         // --- TIMING DIAGNOSTIC ---
         // Log deliveries that arrived later than their scheduled target
         // (normal poll quantization is <= ~0.7 ms; larger deltas indicate a

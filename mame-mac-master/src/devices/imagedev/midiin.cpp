@@ -238,6 +238,9 @@ void midiin_device::tra_complete()
 void midiin_device::tra_callback()
 {
 	int bit = transmit_register_get_data_bit();
+	// TEMP TX DIAGNOSTIC
+	if (machine().time().as_double() > 14.24 && machine().time().as_double() < 14.32)
+		std::fprintf(stderr, "[tx] t=%.5f bit=%d\n", machine().time().as_double(), bit);
 	m_input_cb(bit);
 }
 
