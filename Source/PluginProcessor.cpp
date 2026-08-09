@@ -2701,9 +2701,15 @@ void EnsoniqSD1AudioProcessor::setStateInformation (const void* data, int sizeIn
             apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
         }
 
-        // 2. Restore UI Dimensions
-        savedWindowWidth = xmlState->getIntAttribute("ui_width", 0);
-        savedWindowHeight = xmlState->getIntAttribute("ui_height", 0);
+        // 2. Restore UI Dimensions (only if the host state actually has them —
+        //    never clobber the settings.xml values with zeros).
+        const int uiW = xmlState->getIntAttribute("ui_width", 0);
+        const int uiH = xmlState->getIntAttribute("ui_height", 0);
+        if (uiW > 0 && uiH > 0)
+        {
+            savedWindowWidth = uiW;
+            savedWindowHeight = uiH;
+        }
 
         // =================================================================
         // RAM EXTRACTION & MEDIA PATH RESTORATION

@@ -257,9 +257,19 @@ EnsoniqSD1AudioProcessorEditor::EnsoniqSD1AudioProcessorEditor (EnsoniqSD1AudioP
     boundsConstrainer->setMaximumSize (3840, 2568);
     setConstrainer (boundsConstrainer.get());
 
-    // Restore the remembered window size (snapped to the locked aspect).
-    int w = audioProcessor.savedWindowWidth;
-    int h = audioProcessor.savedWindowHeight;
+    // Restore the remembered window size straight from settings.xml (the DAW
+    // state is unreliable for this), snapped to the locked aspect.
+    int w = 0, h = 0;
+    {
+        const juce::File settingsFile =
+            juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                .getChildFile ("CasioRZ1").getChildFile ("settings.xml");
+        if (auto xml = juce::XmlDocument::parse (settingsFile))
+        {
+            w = xml->getIntAttribute ("window_width", 0);
+            h = xml->getIntAttribute ("window_height", 0);
+        }
+    }
     if (w <= 0 || h <= 0) { w = 1200; h = 802; }   // default: 1.5x native view
     w = juce::jlimit (480, 3840, w);
     h = juce::roundToInt (w * 535.0f / 800.0f);
@@ -267,13 +277,15 @@ EnsoniqSD1AudioProcessorEditor::EnsoniqSD1AudioProcessorEditor (EnsoniqSD1AudioP
     w = juce::roundToInt (h * 800.0f / 535.0f);
     setSize (w, h);
 
+    editorBirthTime = juce::Time::getMillisecondCounter();
     startTimerHz (30);
     audioProcessor.nativePanel.store (true, std::memory_order_release);
 }
 
 EnsoniqSD1AudioProcessorEditor::~EnsoniqSD1AudioProcessorEditor()
 {
-    audioProcessor.saveGlobalSettings();
+    if (sizeSettled)
+        audioProcessor.saveGlobalSettings();
 }
 
 void EnsoniqSD1AudioProcessorEditor::paint (juce::Graphics& g)
@@ -425,7 +437,8 @@ void EnsoniqSD1AudioProcessorEditor::resized()
     // Remember the window size for the next open (persisted on a debounce).
     audioProcessor.savedWindowWidth = getWidth();
     audioProcessor.savedWindowHeight = getHeight();
-    pendingSizeSave = true;
+    if (sizeSettled)
+        pendingSizeSave = true;
 
     // Keep MAME's render target in lockstep with the plugin window (same aspect as rz1.lay)
     if (getWidth() > 0 && getHeight() > 0)
@@ -438,6 +451,13 @@ void EnsoniqSD1AudioProcessorEditor::resized()
 
 void EnsoniqSD1AudioProcessorEditor::timerCallback()
 {
+    if (!sizeSettled)
+    {
+        const juce::uint32 now = juce::Time::getMillisecondCounter();
+        if (now - editorBirthTime >= 2000)
+            sizeSettled = true;
+    }
+
     if (pendingSizeSave)
     {
         const juce::uint32 now = juce::Time::getMillisecondCounter();

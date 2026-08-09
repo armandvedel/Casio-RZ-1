@@ -56,6 +56,9 @@ private:
     // Debounced persistence of the window size (settings.xml).
     bool pendingSizeSave = false;
     juce::uint32 lastSizeSaveTime = 0;
+    juce::uint32 editorBirthTime = 0;
+    bool sizeSettled = false;   // becomes true ~2s after creation (host-driven
+                                // startup resizes are ignored for persistence)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EnsoniqSD1AudioProcessorEditor)
 };
