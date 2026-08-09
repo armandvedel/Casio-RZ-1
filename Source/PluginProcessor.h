@@ -54,6 +54,20 @@ public:
         // Stores the 32-bit integer where each bit represents a specific panel LED
         std::atomic<uint32_t> ledStateMask{ 0 };
 
+        // --- NATIVE JUCE PANEL STATE (MAME thread -> UI thread) ---
+        // Individual RZ-1 LED values (0 = off, 1 = green, 2 = red where
+        // applicable), written by VstOsdInterface::update() on the MAME thread.
+        std::atomic<int> ledSampling{ 0 };
+        std::atomic<int> ledSong{ 0 };
+        std::atomic<int> ledPattern{ 0 };
+        std::atomic<int> ledStartStop{ 0 };
+        // 16 HD44780 display characters packed as bytes (0..7 in Lo, 8..15 in Hi).
+        std::atomic<uint64_t> lcdCharsLo{ 0 };
+        std::atomic<uint64_t> lcdCharsHi{ 0 };
+        // When true the editor draws the panel natively in JUCE, so MAME's
+        // layout rasterization (screenBuffers) can be skipped entirely.
+        std::atomic<bool> nativePanel{ false };
+
         // MAME callback function triggered whenever a hardware output changes
         static void mameOutputNotifier(const char *outname, s32 value, void *param);
         

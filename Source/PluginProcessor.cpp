@@ -701,6 +701,32 @@ public:
                 }
             }
         
+        // Publish panel state for the native JUCE editor (MAME thread only).
+        {
+            const std::string lcd = rz1LcdText();
+            uint64_t lo = 0, hi = 0;
+            for (int i = 0; i < 16 && i < static_cast<int>(lcd.size()); ++i)
+            {
+                const uint8_t c = static_cast<uint8_t>(lcd[i]);
+                if (i < 8)
+                    lo |= static_cast<uint64_t>(c) << (i * 8);
+                else
+                    hi |= static_cast<uint64_t>(c) << ((i - 8) * 8);
+            }
+            processor->lcdCharsLo.store(lo, std::memory_order_relaxed);
+            processor->lcdCharsHi.store(hi, std::memory_order_relaxed);
+
+            auto ledValue = [this](const char *name)
+            {
+                try { return mame_machine->output().get_value(name); }
+                catch (...) { return 0; }
+            };
+            processor->ledSampling.store(ledValue("led_sampling"), std::memory_order_relaxed);
+            processor->ledSong.store(ledValue("led_song"), std::memory_order_relaxed);
+            processor->ledPattern.store(ledValue("led_pattern"), std::memory_order_relaxed);
+            processor->ledStartStop.store(ledValue("led_startstop"), std::memory_order_relaxed);
+        }
+
         if (!processor->isMameRunningFlag()) {
                 mame_machine->schedule_exit();
                 return;
@@ -893,6 +919,10 @@ public:
         if (frameSkipCounter % 2 != 0) {
             return;
         }
+
+        // The native JUCE panel replaces MAME's layout rasterization.
+        if (processor->nativePanel.load(std::memory_order_relaxed))
+            return;
 
         render_target *target = main_target;
         if (target == nullptr) {

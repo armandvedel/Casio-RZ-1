@@ -18,6 +18,10 @@ public:
     void mouseDrag (const juce::MouseEvent&) override;
 
 private:
+    // Draws the whole panel in rz1.lay layout coordinates (800x535) using JUCE
+    // vector graphics, so it renders crisply at any DPI/window size.
+    void drawPanel (juce::Graphics&);
+
     EnsoniqSD1AudioProcessor& audioProcessor;
 
     // rz1.lay view space (all button bounds in the matrix are expressed in this space)
