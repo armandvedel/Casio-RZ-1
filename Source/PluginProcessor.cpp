@@ -65,6 +65,7 @@
 
 #include <iomanip>
 #include <fstream>
+#include <functional>
 
 // MAME Versioning stubs required by the linker
 extern const char bare_build_version[] = "0.287";
@@ -385,12 +386,18 @@ public:
     }
     virtual ~VstOsdFont() { close(); }
 
+    void setLog(std::function<void(const std::string &)> f) { m_log = std::move(f); }
+
     bool open(std::string const &font_path, std::string const &name, int &height) override
     {
         const char *family = (name == "default") ? "SF Mono" : name.c_str();
         m_primary = create_font(family, m_height, m_baseline);
         if (m_primary == nullptr)
+        {
+            if (m_log)
+                m_log("open failed: could not create CoreText font \"" + std::string(family) + "\"");
             return false;
+        }
 
         height = static_cast<int>(std::ceil(m_height));
 
@@ -398,6 +405,9 @@ public:
         // which the panel uses for the VALUE up/down buttons).
         CGFloat fallbackHeight = 0.0;
         m_fallback = create_font("Arial Unicode MS", fallbackHeight, m_fallbackBaseline);
+        if (m_log)
+            m_log("open ok: family=\"" + std::string(family) + "\" height=" + std::to_string(height)
+                  + " fallbackArial=" + (m_fallback ? "yes" : "no"));
         return true;
     }
 
@@ -427,6 +437,13 @@ public:
             {
                 font = m_fallback;
                 baseline = m_fallbackBaseline;
+                if (m_log && m_fallbackLogs < 5)
+                {
+                    ++m_fallbackLogs;
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "glyph fallback U+%04X", static_cast<unsigned>(chnum));
+                    m_log(buf);
+                }
             }
             else
             {
@@ -501,6 +518,8 @@ private:
     CGFloat m_height = 0.0;
     CGFloat m_baseline = 0.0;
     CGFloat m_fallbackBaseline = 0.0;
+    int m_fallbackLogs = 0;
+    std::function<void(const std::string &)> m_log;
 };
 
 class VstOsdInterface : public osd_common_t
@@ -666,6 +685,13 @@ public:
             // This confirms that MAME device clocks are initialized and safe for time calculations.
             if (!processor->mameIsFullyBooted.load(std::memory_order_relaxed)) {
                 processor->mameIsFullyBooted.store(true, std::memory_order_release);
+                // Diagnostics: dump the boot log (incl. font selection) once.
+                {
+                    std::lock_guard<std::mutex> lock(processor->debugLogMutex);
+                    juce::File logFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                        .getChildFile("CasioRZ1").getChildFile("mame_boot_log.txt");
+                    logFile.replaceWithText(processor->debugInitLog);
+                }
             }
         
         if (!processor->isMameRunningFlag()) {
@@ -1239,7 +1265,16 @@ public:
     virtual void customize_input_type_list(std::vector<input_type_entry> &typelist) override { typelist.clear(); };
     virtual std::vector<ui::menu_item> get_slider_list() override { return {}; };
 
-    virtual osd_font::ptr font_alloc() override { return std::make_unique<VstOsdFont>(); };
+    virtual osd_font::ptr font_alloc() override
+    {
+        auto font = std::make_unique<VstOsdFont>();
+        font->setLog([this](const std::string &s)
+        {
+            std::lock_guard<std::mutex> lock(processor->debugLogMutex);
+            processor->debugInitLog += "[FONT] " + juce::String(s) + "\n";
+        });
+        return font;
+    };
     virtual bool get_font_families(std::string const &font_path, std::vector<std::pair<std::string, std::string> > &result) override { return false; };
     virtual bool execute_command(const char *command) override { return false; };
 
