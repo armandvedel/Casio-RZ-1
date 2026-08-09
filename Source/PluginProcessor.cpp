@@ -682,6 +682,11 @@ private:
     double inputStreamPos = 0.0;   // next source-rate sample index to fill
     double inputOffset = 0.0;      // dawSample = inputStreamPos + inputOffset
     bool inputOffsetValid = false;
+
+    // --- BOOT DIAGNOSTIC ---
+    std::chrono::steady_clock::time_point m_wallStart = std::chrono::steady_clock::now();
+    double m_lastDiagLog = -2.0;
+    int m_diagLogCount = 0;
     
 public:
     
@@ -853,6 +858,23 @@ public:
             processor->ledSong.store(ledValue("led_song"), std::memory_order_relaxed);
             processor->ledPattern.store(ledValue("led_pattern"), std::memory_order_relaxed);
             processor->ledStartStop.store(ledValue("led_startstop"), std::memory_order_relaxed);
+
+            // Machine time + LCD every ~2 wall seconds (first 30 entries).
+            // If the engine stalls (audio ring not drained by the host), update()
+            // stops being called and the log simply stops growing; if MAME runs
+            // but the firmware never boots, t repeats at the same value.
+            const double wallNow = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_wallStart).count();
+            if (m_diagLogCount < 30 && wallNow >= m_lastDiagLog + 2.0)
+            {
+                m_lastDiagLog = wallNow;
+                m_diagLogCount++;
+                std::lock_guard<std::mutex> lock(processor->debugLogMutex);
+                juce::File logFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                    .getChildFile("CasioRZ1").getChildFile("mame_boot_log.txt");
+                logFile.appendText("t=" + juce::String(mame_machine->time().as_double(), 4)
+                                   + " wall=" + juce::String(wallNow, 2)
+                                   + " lcd=\"" + lcd + "\"\n");
+            }
         }
 
         if (!processor->isMameRunningFlag()) {
@@ -1706,7 +1728,12 @@ void EnsoniqSD1AudioProcessor::saveGlobalSettings()
 
 EnsoniqSD1AudioProcessor::EnsoniqSD1AudioProcessor()
      : AudioProcessor (BusesProperties()
-                       .withInput  ("Audio In", juce::AudioChannelSet::stereo(), true)
+                       // Disabled by default: several hosts (Logic's AU in
+                       // particular) mishandle an active audio input bus on an
+                       // instrument and stop rendering, which stalls MAME's
+                       // audio-driven boot (blank LCD). Enable the bus in hosts
+                       // that support instrument inputs (e.g. Element/VST3).
+                       .withInput  ("Audio In", juce::AudioChannelSet::stereo(), false)
                        .withOutput ("Main Out", juce::AudioChannelSet::stereo(), true)
                        .withOutput ("Aux Out",  juce::AudioChannelSet::stereo(), false)
                        ),
