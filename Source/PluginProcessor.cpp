@@ -391,7 +391,7 @@ public:
     bool open(std::string const &font_path, std::string const &name, int &height) override
     {
         const char *family = (name == "default") ? "SF Mono" : name.c_str();
-        m_primary = create_font(family, m_height, m_baseline);
+        m_primary = create_font(family, m_height, m_baseline, m_xscale);
         if (m_primary == nullptr)
         {
             if (m_log)
@@ -404,7 +404,7 @@ public:
         // Secondary font for glyphs the primary lacks (SF Mono has no ▲▼,
         // which the panel uses for the VALUE up/down buttons).
         CGFloat fallbackHeight = 0.0;
-        m_fallback = create_font("Arial Unicode MS", fallbackHeight, m_fallbackBaseline);
+        m_fallback = create_font("Arial Unicode MS", fallbackHeight, m_fallbackBaseline, m_xscale);
         if (m_log)
             m_log("open ok: family=\"" + std::string(family) + "\" height=" + std::to_string(height)
                   + " fallbackArial=" + (m_fallback ? "yes" : "no"));
@@ -491,8 +491,14 @@ public:
 
 private:
     static constexpr CGFloat POINT_SIZE = 144.0;
+    // SF Mono's 0.6 em advance is wider than the layout's fixed label boxes
+    // (designed for a ~0.5 em proportional font), so MAME's layout engine
+    // squishes each label to fit — visibly "smushed" and inconsistent across
+    // labels. Condensing the font horizontally to ~0.5 em makes nearly every
+    // label fit naturally while keeping the monospace look.
+    static constexpr CGFloat CONDENSE = 0.83f;
 
-    static CTFontRef create_font(const char *family, CGFloat &height, CGFloat &baseline)
+    static CTFontRef create_font(const char *family, CGFloat &height, CGFloat &baseline, CGFloat xscale)
     {
         CFStringRef font_name = CFStringCreateWithCString(nullptr, family, kCFStringEncodingUTF8);
         if (!font_name)
@@ -503,7 +509,8 @@ private:
         if (!descriptor)
             return nullptr;
 
-        CTFontRef const font(CTFontCreateWithFontDescriptor(descriptor, POINT_SIZE, &CGAffineTransformIdentity));
+        CGAffineTransform const transform = CGAffineTransformMakeScale(xscale, 1.0);
+        CTFontRef const font(CTFontCreateWithFontDescriptor(descriptor, POINT_SIZE, &transform));
         CFRelease(descriptor);
         if (!font)
             return nullptr;
@@ -515,6 +522,7 @@ private:
 
     CTFontRef m_primary = nullptr;
     CTFontRef m_fallback = nullptr;
+    CGFloat m_xscale = CONDENSE;
     CGFloat m_height = 0.0;
     CGFloat m_baseline = 0.0;
     CGFloat m_fallbackBaseline = 0.0;
