@@ -363,6 +363,24 @@ int EnsoniqSD1AudioProcessor::readMidiByte() {
     if (mameMachine->time().as_double() >= midiBuffer[currentRead].targetMameTime) {
         uint8_t data = midiBuffer[currentRead].data;
 
+        // --- TIMING DIAGNOSTIC ---
+        // Log deliveries that arrived later than their scheduled target
+        // (normal poll quantization is <= ~0.7 ms; larger deltas indicate a
+        // scheduling bug). Writes to ~/Documents/CasioRZ1/midi_delivery_log.txt.
+        {
+            const double delivered = mameMachine->time().as_double();
+            const double delta = delivered - midiBuffer[currentRead].targetMameTime;
+            static std::atomic<int> diagWrites{ 0 };
+            if (delta > 0.001 && diagWrites.fetch_add(1) < 2000)
+            {
+                juce::File diagFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                    .getChildFile("CasioRZ1").getChildFile("midi_delivery_log.txt");
+                diagFile.appendText(juce::String("t=") + juce::String(delivered, 6)
+                                    + " delta_ms=" + juce::String(delta * 1000.0, 2)
+                                    + " byte=0x" + juce::String::toHexString(data) + "\n");
+            }
+        }
+
         // Fast wrap-around using bitwise AND
         int nextRead = (currentRead + 1) & (MIDI_BUFFER_SIZE - 1);
         midiReadPos.store(nextRead, std::memory_order_release);
