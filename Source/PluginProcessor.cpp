@@ -377,40 +377,38 @@ class VstOsdFont : public osd_font
 {
 public:
     VstOsdFont() = default;
-    VstOsdFont(VstOsdFont &&obj) : m_font(obj.m_font) { obj.m_font = nullptr; }
+    VstOsdFont(VstOsdFont &&obj)
+        : m_primary(obj.m_primary), m_fallback(obj.m_fallback)
+    {
+        obj.m_primary = nullptr;
+        obj.m_fallback = nullptr;
+    }
     virtual ~VstOsdFont() { close(); }
 
     bool open(std::string const &font_path, std::string const &name, int &height) override
     {
         const char *family = (name == "default") ? "SF Mono" : name.c_str();
-        CFStringRef font_name = CFStringCreateWithCString(nullptr, family, kCFStringEncodingUTF8);
-        if (!font_name)
+        m_primary = create_font(family, m_height, m_baseline);
+        if (m_primary == nullptr)
             return false;
 
-        CTFontDescriptorRef const descriptor(CTFontDescriptorCreateWithNameAndSize(font_name, 0.0));
-        CFRelease(font_name);
-        if (!descriptor)
-            return false;
-
-        CTFontRef const font(CTFontCreateWithFontDescriptor(descriptor, POINT_SIZE, &CGAffineTransformIdentity));
-        CFRelease(descriptor);
-        if (!font)
-            return false;
-
-        m_baseline = CTFontGetDescent(font) + CTFontGetLeading(font);
-        m_height = CTFontGetAscent(font) + m_baseline;
         height = static_cast<int>(std::ceil(m_height));
 
-        close();
-        m_font = font;
+        // Secondary font for glyphs the primary lacks (SF Mono has no ▲▼,
+        // which the panel uses for the VALUE up/down buttons).
+        CGFloat fallbackHeight = 0.0;
+        m_fallback = create_font("Arial Unicode MS", fallbackHeight, m_fallbackBaseline);
         return true;
     }
 
     void close() override
     {
-        if (m_font)
-            CFRelease(m_font);
-        m_font = nullptr;
+        if (m_primary)
+            CFRelease(m_primary);
+        if (m_fallback)
+            CFRelease(m_fallback);
+        m_primary = nullptr;
+        m_fallback = nullptr;
     }
 
     bool get_bitmap(char32_t chnum, bitmap_argb32 &bitmap, std::int32_t &width,
@@ -418,15 +416,31 @@ public:
     {
         UniChar const uni_char(static_cast<UniChar>(chnum));
         CGGlyph glyph;
-        CTFontGetGlyphsForCharacters(m_font, &uni_char, &glyph, 1);
+        CTFontRef font = m_primary;
+        CGFloat baseline = m_baseline;
+
+        if (!CTFontGetGlyphsForCharacters(m_primary, &uni_char, &glyph, 1) || glyph == 0)
+        {
+            // Primary font lacks this character; try the fallback.
+            if (m_fallback != nullptr &&
+                CTFontGetGlyphsForCharacters(m_fallback, &uni_char, &glyph, 1) && glyph != 0)
+            {
+                font = m_fallback;
+                baseline = m_fallbackBaseline;
+            }
+            else
+            {
+                return false;
+            }
+        }
 
         #if defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 101100
-        CGRect const bounds(CTFontGetBoundingRectsForGlyphs(m_font, kCTFontOrientationHorizontal, &glyph, nullptr, 1));
+        CGRect const bounds(CTFontGetBoundingRectsForGlyphs(font, kCTFontOrientationHorizontal, &glyph, nullptr, 1));
         #else
-        CGRect const bounds(CTFontGetBoundingRectsForGlyphs(m_font, kCTFontHorizontalOrientation, &glyph, nullptr, 1));
+        CGRect const bounds(CTFontGetBoundingRectsForGlyphs(font, kCTFontHorizontalOrientation, &glyph, nullptr, 1));
         #endif
         CGSize advance(CGSizeZero);
-        CTFontGetAdvancesForGlyphs(m_font, kCTFontOrientationHorizontal, &glyph, &advance, 1);
+        CTFontGetAdvancesForGlyphs(font, kCTFontOrientationHorizontal, &glyph, &advance, 1);
 
         if (CGRectEqualToRect(bounds, CGRectNull) && CGSizeEqualToSize(advance, CGSizeZero))
             return false;
@@ -444,13 +458,13 @@ public:
                                                          8, bitmap.rowpixels() * 4, color_space, bitmap_info));
         if (context)
         {
-            CGFontRef const font_ref(CTFontCopyGraphicsFont(m_font, nullptr));
-            CGContextSetTextPosition(context, -bounds.origin.x, m_baseline);
+            CGFontRef const font_ref(CTFontCopyGraphicsFont(font, nullptr));
+            CGContextSetTextPosition(context, -bounds.origin.x, baseline);
             CGContextSetRGBFillColor(context, 1.0, 1.0, 1.0, 1.0);
             CGContextSetFont(context, font_ref);
             CGContextSetFontSize(context, POINT_SIZE);
             CGPoint pos = CGPointMake(0, 0);
-            CTFontDrawGlyphs(m_font, &glyph, &pos, 1, context);
+            CTFontDrawGlyphs(font, &glyph, &pos, 1, context);
             CGFontRelease(font_ref);
             CGContextRelease(context);
         }
@@ -460,9 +474,33 @@ public:
 
 private:
     static constexpr CGFloat POINT_SIZE = 144.0;
-    CTFontRef m_font = nullptr;
+
+    static CTFontRef create_font(const char *family, CGFloat &height, CGFloat &baseline)
+    {
+        CFStringRef font_name = CFStringCreateWithCString(nullptr, family, kCFStringEncodingUTF8);
+        if (!font_name)
+            return nullptr;
+
+        CTFontDescriptorRef const descriptor(CTFontDescriptorCreateWithNameAndSize(font_name, 0.0));
+        CFRelease(font_name);
+        if (!descriptor)
+            return nullptr;
+
+        CTFontRef const font(CTFontCreateWithFontDescriptor(descriptor, POINT_SIZE, &CGAffineTransformIdentity));
+        CFRelease(descriptor);
+        if (!font)
+            return nullptr;
+
+        baseline = CTFontGetDescent(font) + CTFontGetLeading(font);
+        height = CTFontGetAscent(font) + baseline;
+        return font;
+    }
+
+    CTFontRef m_primary = nullptr;
+    CTFontRef m_fallback = nullptr;
     CGFloat m_height = 0.0;
     CGFloat m_baseline = 0.0;
+    CGFloat m_fallbackBaseline = 0.0;
 };
 
 class VstOsdInterface : public osd_common_t
