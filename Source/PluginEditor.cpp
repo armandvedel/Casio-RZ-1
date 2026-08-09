@@ -54,13 +54,15 @@ const juce::Rectangle<int> sampleLabelStrips[] =
     { 662, 436, 46, 9 },   // SAMPLE 4
 };
 
-// Faders filling the horizontal space above the section labels: 10 evenly
-// spaced instrument faders (x 53..431), a sampling level fader under the
-// SAMPLING/LEVEL area (x 530) and an overall volume fader under VOLUME (x 588).
+// Faders filling the horizontal space above the section labels: 10 instrument
+// faders evenly spaced and aligned with the 1..10 digits on the teal strip
+// (the digits were nudged to the same even pitch), a sampling level fader
+// under the SAMPLING/LEVEL area (x 530) and an overall volume fader under
+// VOLUME (x 588).
 // They start below the top bar AND the sampling LED, so they are a bit shorter.
 constexpr int    faderCount  = 12;
 constexpr float  faderCenters[faderCount] =
-    { 53.0f, 95.0f, 137.0f, 179.0f, 221.0f, 263.0f, 305.0f, 347.0f, 389.0f, 431.0f,
+    { 70.5f, 108.5f, 146.5f, 184.5f, 222.5f, 260.5f, 298.5f, 336.5f, 374.5f, 412.5f,
       530.0f, 588.0f };
 constexpr float  faderHalfCell = 19.0f;
 constexpr float  faderY0     = 42.0f;  // below the top bar and the sampling LED
@@ -85,12 +87,12 @@ const PanelText panelTexts[] =
 {
     { 69, 16, 3, 7, "1", panelDark },
     { 107, 16, 3, 7, "2", panelDark },
-    { 143, 16, 3, 7, "3", panelDark },
+    { 145, 16, 3, 7, "3", panelDark },
     { 183, 16, 3, 7, "4", panelDark },
     { 221, 16, 3, 7, "5", panelDark },
     { 259, 16, 3, 7, "6", panelDark },
-    { 296, 16, 3, 7, "7", panelDark },
-    { 334, 16, 3, 7, "8", panelDark },
+    { 297, 16, 3, 7, "7", panelDark },
+    { 335, 16, 3, 7, "8", panelDark },
     { 373, 16, 3, 7, "9", panelDark },
     { 409, 16, 6, 7, "10", panelDark },
     { 623, 46, 141, 31, "CASIO", panelWhite },
