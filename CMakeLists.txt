@@ -47,6 +47,12 @@ juce_add_plugin(CasioRZ1
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT TRUE
+    # Register the AU as a MIDI-Controlled Effect (aumf) instead of a Music
+    # Device: Logic Pro doesn't render aumu instruments that carry an audio
+    # input bus (MAME never boots -> blank LCD), but aumf hosts audio inputs
+    # as sidechain AND receives MIDI, which is exactly what the RZ-1 needs
+    # (drums from MIDI + sampling from the input bus).
+    AU_MAIN_TYPE kAudioUnitType_MusicEffect
     COPY_PLUGIN_AFTER_BUILD FALSE
     VST3_CATEGORIES Instrument
 )

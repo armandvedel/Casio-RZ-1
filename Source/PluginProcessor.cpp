@@ -1728,12 +1728,7 @@ void EnsoniqSD1AudioProcessor::saveGlobalSettings()
 
 EnsoniqSD1AudioProcessor::EnsoniqSD1AudioProcessor()
      : AudioProcessor (BusesProperties()
-                       // Disabled by default: several hosts (Logic's AU in
-                       // particular) mishandle an active audio input bus on an
-                       // instrument and stop rendering, which stalls MAME's
-                       // audio-driven boot (blank LCD). Enable the bus in hosts
-                       // that support instrument inputs (e.g. Element/VST3).
-                       .withInput  ("Audio In", juce::AudioChannelSet::stereo(), false)
+                       .withInput  ("Audio In", juce::AudioChannelSet::stereo(), true)
                        .withOutput ("Main Out", juce::AudioChannelSet::stereo(), true)
                        .withOutput ("Aux Out",  juce::AudioChannelSet::stereo(), false)
                        ),
@@ -2033,14 +2028,15 @@ bool EnsoniqSD1AudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
 
-    // 2. Audio In may be stereo, mono, or disabled (hosts differ wildly on how
-    //    they present instrument inputs — Logic compacts the buffer to
-    //    max(inputs, outputs), VST3 hosts usually pass the full channel count).
-    auto inBus = layouts.getChannelSet(true, 0);
-    if (inBus != juce::AudioChannelSet::stereo()
-        && inBus != juce::AudioChannelSet::mono()
-        && inBus != juce::AudioChannelSet::disabled())
-        return false;
+    // 2. Audio In (VST3 builds only) may be stereo, mono, or disabled.
+    if (getBusCount(true) > 0)
+    {
+        auto inBus = layouts.getChannelSet(true, 0);
+        if (inBus != juce::AudioChannelSet::stereo()
+            && inBus != juce::AudioChannelSet::mono()
+            && inBus != juce::AudioChannelSet::disabled())
+            return false;
+    }
 
     // 3. Aux Out must be stereo ONLY IF the user explicitly enables it in the DAW
     auto auxBus = layouts.getChannelSet(false, 1);
@@ -2057,6 +2053,29 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     
       int numSamples = buffer.getNumSamples();
       if (numSamples <= 0) return; // Safety check
+
+        // --- RENDER DIAGNOSTIC (first 10 blocks) ---
+        // Confirms the host actually calls processBlock and shows the
+        // ring/anchor state. If these lines never appear, the host isn't
+        // rendering the plugin at all (which stalls MAME's audio-driven boot).
+        if (pbDiagCount < 10)
+        {
+            pbDiagCount++;
+            static const auto bootWallStart = std::chrono::steady_clock::now();
+            const double wallNow = std::chrono::duration<double>(std::chrono::steady_clock::now() - bootWallStart).count();
+            std::lock_guard<std::mutex> lock(debugLogMutex);
+            juce::File logFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                .getChildFile("CasioRZ1").getChildFile("mame_boot_log.txt");
+            logFile.appendText("pb wall=" + juce::String(wallNow, 2)
+                + " n=" + juce::String(numSamples)
+                + " in=" + juce::String(getTotalNumInputChannels())
+                + " w=" + juce::String(totalWritten.load(std::memory_order_relaxed))
+                + " r=" + juce::String(totalRead.load(std::memory_order_relaxed))
+                + " anchor=" + juce::String(needAnchorSync.load(std::memory_order_relaxed) ? "y" : "n")
+                + " booted=" + juce::String(mameIsFullyBooted.load(std::memory_order_acquire) ? "y" : "n")
+                + " mameT=" + (mameMachine != nullptr ? juce::String(mameMachine->time().as_double(), 4) : juce::String("none"))
+                + "\n");
+        }
         
         // CRITICAL SAFETY GATE:
         // Logic Pro (AU) often calls processBlock before MAME's background thread is ready.
