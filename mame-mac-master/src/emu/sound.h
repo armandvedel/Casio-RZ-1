@@ -397,7 +397,12 @@ public:
 		std::vector<channel_mapping> m_channel_mappings;
 	};
 
-	static constexpr int STREAMS_UPDATE_FREQUENCY = 50;
+	// Raised from 50 to 1000 Hz for the VST plugin: the plugin throttles MAME
+	// via the audio ring buffer, and machine time freezes between sound
+	// updates, stalling the MIDI input poll. A 1 ms audio quantum keeps the
+	// freeze periods (and therefore MIDI delivery jitter) at ~1 ms instead of
+	// ~20 ms.
+	static constexpr int STREAMS_UPDATE_FREQUENCY = 1000;
 
 	// construction/destruction
 	sound_manager(running_machine &machine);

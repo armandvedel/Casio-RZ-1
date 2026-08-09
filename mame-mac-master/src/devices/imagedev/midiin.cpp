@@ -191,7 +191,7 @@ std::pair<std::error_condition, std::string> midiin_device::call_load()
 			return std::make_pair(image_error::UNSPECIFIED, std::string());
 		}
 
-		m_timer->adjust(attotime::from_hz(1500), 0, attotime::from_hz(1500));
+		m_timer->adjust(attotime::from_hz(4000), 0, attotime::from_hz(4000));
 		return std::make_pair(std::error_condition(), std::string());
 	}
 }

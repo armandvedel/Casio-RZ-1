@@ -126,8 +126,10 @@ void EnsoniqSD1AudioProcessor::pushAudioFromMame(const int16_t* pcmBuffer, int n
         // We force a much tighter wake-up interval on Windows.
             mameThrottleEvent.wait(1);
 #else
-        // Original macOS behavior preserved
-            mameThrottleEvent.wait(5);
+        // 1 ms wake granularity so MAME's machine time (and the MIDI input
+        // poll) advances in ~1 ms steps instead of freezing for up to 5 ms
+        // between DAW buffer consumptions.
+            mameThrottleEvent.wait(1);
 #endif
             // --- OPTIMIZATION END ---
         }

@@ -472,25 +472,21 @@ private:
                 
     int getInternalHardwareLatencySamples() const {
         double sr = hostSampleRate.load(std::memory_order_relaxed);
-        // Measured MIDI->audio round trip on the MAME side: the midiin device
-        // polls at 1500 Hz (~0.33 ms avg), the 31250-baud serial byte adds
-        // ~0.3 ms, plus firmware trigger — ~0.5 ms total. The old 24.4 ms
-        // over-reported and made the RZ-1 sound ~4 ms early against the DAW
-        // grid. (The 960-sample audio-buffer offset is now handled by the
-        // anchor fix in pushAudioFromMame.)
-        return static_cast<int>(0.0005 * sr);
+        // Measured MIDI->audio round trip on the MAME side with the raised
+        // stream rate: delivery <= ~1 ms (4 kHz poll + serial) plus firmware
+        // and one audio quantum of generation delay — ~2 ms total.
+        return static_cast<int>(0.002 * sr);
     }
 
-    // MAME's audio callback delivers ~20 ms of audio per update (960 samples
-    // @ 48 kHz), so the emulator's lookahead over the DAW read position
-    // oscillates by up to one buffer. MIDI/F8 targets are scheduled this far
-    // past the nominal threshold so they are always in the future and are
-    // delivered at their exact time instead of being clamped to MAME-now
-    // (which landed notes at a random position inside the buffer — the
-    // "~1000 samples, quite random" timing error).
+    // MAME's audio callback now delivers ~1 ms of audio per update (raised
+    // STREAMS_UPDATE_FREQUENCY to 1000 Hz), so the emulator's lookahead over
+    // the DAW read position oscillates by up to ~1 ms. MIDI/F8 targets are
+    // scheduled this far past the nominal threshold so they are always in the
+    // future and delivered at their exact time (previously a 20 ms buffer
+    // caused "~1000 samples, quite random" timing).
     int getMidiLookaheadSamples() const {
         double sr = hostSampleRate.load(std::memory_order_relaxed);
-        return static_cast<int>(0.023 * sr);   // 23 ms > 20 ms audio buffer
+        return static_cast<int>(0.005 * sr);   // 5 ms > ~2 ms max lookahead swing
     }
 
     // Audio Ring Buffers (Generously sized to prevent underruns)
