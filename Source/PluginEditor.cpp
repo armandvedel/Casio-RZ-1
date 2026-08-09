@@ -35,7 +35,9 @@ const juce::Rectangle<int> tealBarRects[] =
     { 167, 15, 36, 10 }, { 205, 15, 36, 10 }, { 243, 15, 36, 10 }, { 281, 15, 36, 10 },
     { 319, 15, 36, 10 }, { 357, 15, 36, 10 }, { 395, 15, 36, 10 }, { 433, 15, 67, 10 },
     { 502, 15, 56, 10 }, { 560, 15, 56, 10 }, { 618, 15, 160, 10 },
-    { 53, 177, 378, 1 }, { 502, 177, 56, 1 }, { 560, 177, 56, 1 },
+    // The INSTRUMENT LEVEL underline closes the fader strip (the LEVEL/VOLUME
+    // underlines stay directly under their labels).
+    { 53, 250, 378, 1 }, { 502, 177, 56, 1 }, { 560, 177, 56, 1 },
 };
 
 // White LCD bezel bars surrounding the 115x20 display.
@@ -54,15 +56,23 @@ const juce::Rectangle<int> sampleLabelStrips[] =
     { 662, 436, 46, 9 },   // SAMPLE 4
 };
 
-// Instrument level faders: 10 vertical sliders in the INSTRUMENT LEVEL strip,
-// positioned left of the LCD (as on the real RZ-1).
+// Instrument level faders: 10 vertical sliders filling the INSTRUMENT LEVEL
+// strip — the entire horizontal space between the label and the closing teal
+// line — with the instrument name labelled inside the top of each slot.
 constexpr int    faderCount  = 10;
 constexpr float  faderX0     = 53.0f;
-constexpr float  faderPitch  = 24.7f;
-constexpr float  faderY0     = 188.0f;
-constexpr float  faderH      = 56.0f;
-constexpr float  faderSlotW  = 20.0f;
+constexpr float  faderPitch  = 37.8f;  // full strip width (53 .. ~431)
+constexpr float  faderY0     = 180.0f; // below the label, above the closing line
+constexpr float  faderH      = 68.0f;  // y 180..248, filling the allotted space
+constexpr float  faderSlotW  = 30.0f;
 constexpr float  faderCapH   = 12.0f;
+constexpr float  faderLabelY = 181.0f;
+
+const char* const faderLabels[faderCount] =
+{
+    "TOM 1", "TOM 2", "TOM 3", "B D", "RIM/SD",
+    "HIHAT", "CLAPS/RIDE", "COWBELL/CRASH", "SAMPLE 1/2", "SAMPLE 3/4",
+};
 
 // All text elements (auto-generated from rz1.lay: position, string, color).
 const PanelText panelTexts[] =
@@ -283,11 +293,11 @@ void EnsoniqSD1AudioProcessorEditor::drawPanel (juce::Graphics& g)
     for (const auto& r : tealBarRects)
         g.fillRect (r);
 
-    // Separator lines below the instrument section
+    // Separator lines closing the instrument/fader section
     g.setColour (juce::Colour (51, 51, 51));
-    g.fillRect (1, 180, 798, 1);
+    g.fillRect (1, 252, 798, 1);
     g.setColour (juce::Colours::black);
-    g.fillRect (1, 181, 798, 1);
+    g.fillRect (1, 253, 798, 1);
 
     // LCD bezel
     g.setColour (juce::Colour (211, 206, 193));
@@ -325,9 +335,17 @@ void EnsoniqSD1AudioProcessorEditor::drawPanel (juce::Graphics& g)
         g.setColour (juce::Colour (51, 51, 51));
         g.fillRect (slotX, faderY0, faderSlotW, faderH);
 
-        // Cap, positioned by the fader value (top = full)
+        // Instrument label inside the top of the slot
+        g.setFont (juce::FontOptions().withName ("Verdana").withHeight (7.0f).withStyle ("Bold"));
+        g.setColour (panelWhite);
+        g.drawText (juce::String (faderLabels[i]),
+                    cx - faderPitch * 0.5f, faderLabelY, faderPitch, 8.0f,
+                    juce::Justification::centred, false);
+
+        // Cap, positioned by the fader value (top = full), sliding below the
+        // label zone inside the slot.
         const float v = (i < faderCount) ? faderValues[i] : 1.0f;
-        const float capY = faderY0 + (1.0f - v) * (faderH - faderCapH);
+        const float capY = faderY0 + faderCapH + (1.0f - v) * (faderH - 2.0f * faderCapH);
         g.setColour (juce::Colour (211, 206, 193));
         g.fillRect (slotX - 1.0f, capY, faderSlotW + 2.0f, faderCapH);
 
@@ -437,7 +455,8 @@ void EnsoniqSD1AudioProcessorEditor::setFaderFromY (int idx, float layoutY)
 {
     if (idx < 0 || idx >= faderCount)
         return;
-    float v = 1.0f - (layoutY - faderY0) / (faderH - faderCapH);
+    const float travel = faderH - 2.0f * faderCapH;
+    float v = 1.0f - (layoutY - (faderY0 + faderCapH)) / travel;
     v = juce::jlimit (0.0f, 1.0f, v);
     faderValues[idx] = v;
     audioProcessor.instrumentLevel[idx].store (v, std::memory_order_relaxed);
