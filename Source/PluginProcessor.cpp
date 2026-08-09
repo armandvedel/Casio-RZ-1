@@ -1954,9 +1954,13 @@ void EnsoniqSD1AudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
                         // Detect Maschine once, shared by all processBlock Maschine-specific branches
                         isMaschineHost = hostPath.contains("maschine");
                         
-                        // If this is a plugin scanner or validator (e.g., Cubase vstscanner.exe),
-                        // we have absolutely no intention of running MAME and writing to the file system!
-                        if (hostPath.contains("scanner") || hostPath.contains("validator")) {
+                        // If this is a plugin scanner or validator (e.g., Cubase vstscanner.exe,
+                        // macOS auval/auvaltool, Logic's AU scan), we have absolutely no intention
+                        // of running MAME and writing to the file system! Booting MAME inside the
+                        // validator makes it wait forever for audio drains the validator never
+                        // performs, so validation hangs and hosts (Logic) keep stale component
+                        // registrations (e.g. an old aumu type after switching to aumf).
+                        if (hostPath.contains("scanner") || hostPath.contains("validator") || hostPath.contains("auval")) {
                             isMameRunning = false;
                             return;
                         }
