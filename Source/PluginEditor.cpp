@@ -43,6 +43,16 @@ const juce::Rectangle<int> lcdBezel[] =
     { 319, 211, 161, 13 }, { 319, 211, 23, 47 }, { 319, 244, 161, 14 }, { 457, 211, 23, 47 },
 };
 
+// Lavender background strips behind the sampling/sample labels (button_blue).
+const juce::Rectangle<int> sampleLabelStrips[] =
+{
+    { 446, 317, 37, 9 },   // SAMPLING
+    { 605, 379, 46, 9 },   // SAMPLE 1
+    { 605, 436, 46, 9 },   // SAMPLE 2
+    { 662, 379, 46, 9 },   // SAMPLE 3
+    { 662, 436, 46, 9 },   // SAMPLE 4
+};
+
 // All text elements (auto-generated from rz1.lay: position, string, color).
 const PanelText panelTexts[] =
 {
@@ -271,6 +281,11 @@ void EnsoniqSD1AudioProcessorEditor::drawPanel (juce::Graphics& g)
     // LCD bezel
     g.setColour (juce::Colour (211, 206, 193));
     for (const auto& r : lcdBezel)
+        g.fillRect (r);
+
+    // Lavender strips behind the sampling/sample labels
+    g.setColour (juce::Colour (153, 153, 188));
+    for (const auto& r : sampleLabelStrips)
         g.fillRect (r);
 
     // LCD display (16 chars published by the MAME thread)
