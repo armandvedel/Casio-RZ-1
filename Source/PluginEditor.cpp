@@ -169,9 +169,13 @@ void drawPanelText (juce::Graphics& g, const PanelText& t)
     }
 
     const int n = static_cast<int> (std::strlen (t.text));
+    // All labels of the same height render at the same size so, e.g., "B D"
+    // matches "TOM 2" and "SONG" matches "PATTERN". The width clamp only
+    // shrinks genuinely long words in narrow boxes, and the floor keeps short
+    // labels (B D / S D / NO / YES) from getting lost.
     float fh = t.h * 1.3f;
     if (n > 1)
-        fh = juce::jmin (fh, t.w * 1.6f / n);
+        fh = juce::jmax (t.h * 0.9f, juce::jmin (fh, t.w * 2.2f / n));
     fh = juce::jmax (4.0f, fh);
 
     g.setFont (juce::FontOptions().withName ("Verdana").withHeight (fh).withStyle ("Bold"));
