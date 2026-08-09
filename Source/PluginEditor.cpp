@@ -23,7 +23,10 @@ void EnsoniqSD1AudioProcessorEditor::paint (juce::Graphics& g)
     // thread can never free the pixels mid-paint.
     const auto screenBuffer = audioProcessor.screenBuffers[bufferIndex];
     
-    // Draw the MAME rendered layout
+    // Draw the MAME rendered layout. The buffer is rasterized at physical
+    // pixels, so on a 2x display this maps 1:1 to the screen; high-quality
+    // resampling only kicks in when the host applies its own zoom.
+    g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
     g.drawImageWithin (screenBuffer, 0, 0, getWidth(), getHeight(),
                        juce::RectanglePlacement::stretchToFit);
 
@@ -59,18 +62,66 @@ void EnsoniqSD1AudioProcessorEditor::paint (juce::Graphics& g)
 
 void EnsoniqSD1AudioProcessorEditor::resized()
 {
-    // Keep MAME's render target in lockstep with the plugin window (same aspect as rz1.lay)
-    if (getWidth() > 0 && getHeight() > 0)
-    {
-        audioProcessor.windowWidth.store (getWidth(), std::memory_order_release);
-        audioProcessor.windowHeight.store (getHeight(), std::memory_order_release);
-        audioProcessor.requestRenderResize.store (true, std::memory_order_release);
-    }
+    updateRenderSize();
 }
 
 void EnsoniqSD1AudioProcessorEditor::timerCallback()
 {
+    // Re-push the render size if the device scale changed (e.g. the plugin
+    // window moved to a display with a different scale factor).
+    const float scale = getRenderScale();
+    if (scale != lastRenderScale)
+        updateRenderSize();
+
     repaint();
+}
+
+float EnsoniqSD1AudioProcessorEditor::getRenderScale() const
+{
+    if (auto* peer = getPeer())
+    {
+        const double s = peer->getPlatformScaleFactor();
+        if (s >= 1.0)
+            return static_cast<float> (s);
+    }
+
+    // No peer yet (editor not attached to a host window): fall back to the
+    // primary display so the initial boot still picks the right density.
+    if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+        return juce::jmax (1.0f, static_cast<float> (display->scale));
+
+    return 1.0f;
+}
+
+void EnsoniqSD1AudioProcessorEditor::updateRenderSize()
+{
+    // Keep MAME's render target in lockstep with the plugin window, but at
+    // physical pixel resolution (logical points × device scale) so the panel
+    // is displayed 1:1 on Retina. Same aspect as rz1.lay.
+    const float scale = getRenderScale();
+    const int physW = juce::jmax (1, juce::roundToInt (static_cast<float> (getWidth()) * scale));
+    const int physH = juce::jmax (1, juce::roundToInt (static_cast<float> (getHeight()) * scale));
+
+    // Bound the render resolution: a maximized window on a 3x display would
+    // otherwise allocate multi-hundred-MB buffers. The capped remainder is
+    // downscaled smoothly in paint().
+    constexpr int maxPhysicalDim = 4096;
+    int cappedW = physW;
+    int cappedH = physH;
+    if (juce::jmax (physW, physH) > maxPhysicalDim)
+    {
+        const float k = static_cast<float> (maxPhysicalDim) / static_cast<float> (juce::jmax (physW, physH));
+        cappedW = juce::jmax (1, juce::roundToInt (static_cast<float> (physW) * k));
+        cappedH = juce::jmax (1, juce::roundToInt (static_cast<float> (physH) * k));
+    }
+
+    lastRenderScale = scale;
+    if (getWidth() > 0 && getHeight() > 0)
+    {
+        audioProcessor.windowWidth.store (cappedW, std::memory_order_release);
+        audioProcessor.windowHeight.store (cappedH, std::memory_order_release);
+        audioProcessor.requestRenderResize.store (true, std::memory_order_release);
+    }
 }
 
 // ==============================================================================
