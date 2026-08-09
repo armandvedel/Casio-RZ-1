@@ -8,6 +8,13 @@
   ==============================================================================
 */
 
+// NOTE: CoreText/CoreGraphics/CoreFoundation must be included BEFORE any
+// JUCE/MAME header: JuceHeader.h ends with `using namespace juce`, which makes
+// the Carbon `Point` typedef from MacTypes.h ambiguous with juce::Point.
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <CoreText/CoreText.h>
+
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
@@ -43,8 +50,6 @@
 #include "esqpanel.h"
 #include "frontend/mame/ui/ui.h"
 #include "osd/modules/lib/osdobj_common.h"
-#include "osd/modules/font/font_module.h"
-#include "osd/modules/osdmodule.h"
 #include "uiinput.h"
 #include "inputdev.h"
 #include "emuopts.h"
@@ -359,6 +364,107 @@ int EnsoniqSD1AudioProcessor::readMidiByte() {
 // HEADLESS OSD (Operating System Dependent) INTERFACE
 // This class acts as the bridge between MAME's core and the JUCE environment.
 // ==============================================================================
+
+// CoreText-backed font provider for the panel labels.
+//
+// The plugin's minimal OSD skips osd_common_t::init_subsystems(), so MAME's
+// font modules are never selected and layout text would fall back to the
+// compiled-in 23 px bitmap font (pixelated labels). Rendering the layout text
+// through CoreText instead lets us pick a font designed for small sizes:
+// SF Mono is the sharpest of the families tested (Arial Unicode MS, Verdana,
+// Tahoma, Menlo, SF Mono) at the panel's 7-31 px label sizes.
+class VstOsdFont : public osd_font
+{
+public:
+    VstOsdFont() = default;
+    VstOsdFont(VstOsdFont &&obj) : m_font(obj.m_font) { obj.m_font = nullptr; }
+    virtual ~VstOsdFont() { close(); }
+
+    bool open(std::string const &font_path, std::string const &name, int &height) override
+    {
+        const char *family = (name == "default") ? "SF Mono" : name.c_str();
+        CFStringRef font_name = CFStringCreateWithCString(nullptr, family, kCFStringEncodingUTF8);
+        if (!font_name)
+            return false;
+
+        CTFontDescriptorRef const descriptor(CTFontDescriptorCreateWithNameAndSize(font_name, 0.0));
+        CFRelease(font_name);
+        if (!descriptor)
+            return false;
+
+        CTFontRef const font(CTFontCreateWithFontDescriptor(descriptor, POINT_SIZE, &CGAffineTransformIdentity));
+        CFRelease(descriptor);
+        if (!font)
+            return false;
+
+        m_baseline = CTFontGetDescent(font) + CTFontGetLeading(font);
+        m_height = CTFontGetAscent(font) + m_baseline;
+        height = static_cast<int>(std::ceil(m_height));
+
+        close();
+        m_font = font;
+        return true;
+    }
+
+    void close() override
+    {
+        if (m_font)
+            CFRelease(m_font);
+        m_font = nullptr;
+    }
+
+    bool get_bitmap(char32_t chnum, bitmap_argb32 &bitmap, std::int32_t &width,
+                    std::int32_t &xoffs, std::int32_t &yoffs) override
+    {
+        UniChar const uni_char(static_cast<UniChar>(chnum));
+        CGGlyph glyph;
+        CTFontGetGlyphsForCharacters(m_font, &uni_char, &glyph, 1);
+
+        #if defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 101100
+        CGRect const bounds(CTFontGetBoundingRectsForGlyphs(m_font, kCTFontOrientationHorizontal, &glyph, nullptr, 1));
+        #else
+        CGRect const bounds(CTFontGetBoundingRectsForGlyphs(m_font, kCTFontHorizontalOrientation, &glyph, nullptr, 1));
+        #endif
+        CGSize advance(CGSizeZero);
+        CTFontGetAdvancesForGlyphs(m_font, kCTFontOrientationHorizontal, &glyph, &advance, 1);
+
+        if (CGRectEqualToRect(bounds, CGRectNull) && CGSizeEqualToSize(advance, CGSizeZero))
+            return false;
+
+        std::size_t const bitmap_width(std::max(std::ceil(bounds.size.width), CGFloat(1.0)));
+        width = static_cast<std::int32_t>(std::ceil(advance.width));
+        xoffs = static_cast<std::int32_t>(std::ceil(bounds.origin.x));
+        yoffs = 0;
+        bitmap.allocate(bitmap_width, static_cast<std::size_t>(m_height));
+
+        CGBitmapInfo const bitmap_info(kCGBitmapByteOrder32Host | kCGImageAlphaPremultipliedFirst);
+        CGColorSpaceRef const color_space(CGColorSpaceCreateDeviceRGB());
+        CGContextRef const context(CGBitmapContextCreate(bitmap.raw_pixptr(0), bitmap_width,
+                                                         static_cast<std::size_t>(m_height),
+                                                         8, bitmap.rowpixels() * 4, color_space, bitmap_info));
+        if (context)
+        {
+            CGFontRef const font_ref(CTFontCopyGraphicsFont(m_font, nullptr));
+            CGContextSetTextPosition(context, -bounds.origin.x, m_baseline);
+            CGContextSetRGBFillColor(context, 1.0, 1.0, 1.0, 1.0);
+            CGContextSetFont(context, font_ref);
+            CGContextSetFontSize(context, POINT_SIZE);
+            CGPoint pos = CGPointMake(0, 0);
+            CTFontDrawGlyphs(m_font, &glyph, &pos, 1, context);
+            CGFontRelease(font_ref);
+            CGContextRelease(context);
+        }
+        CGColorSpaceRelease(color_space);
+        return bitmap.valid();
+    }
+
+private:
+    static constexpr CGFloat POINT_SIZE = 144.0;
+    CTFontRef m_font = nullptr;
+    CGFloat m_height = 0.0;
+    CGFloat m_baseline = 0.0;
+};
+
 class VstOsdInterface : public osd_common_t
 {
 private:
@@ -384,14 +490,6 @@ private:
     double hostSyncSetupBase = 0.0;
     bool hostSyncSetupStarted = false;
     bool hostSyncSetupDone = false;
-
-    // --- VECTOR FONT (CoreText) ---
-    // The plugin's minimal OSD skips osd_common_t::init_subsystems(), so the
-    // font module is never selected and MAME falls back to its compiled-in
-    // 23 px bitmap font (pixelated panel labels at larger window sizes).
-    // Lazily register + select the macOS CoreText font module instead.
-    std::unique_ptr<osd_module_manager> m_fontModule;
-    font_module *m_font = nullptr;
     
 public:
     
@@ -1103,27 +1201,7 @@ public:
     virtual void customize_input_type_list(std::vector<input_type_entry> &typelist) override { typelist.clear(); };
     virtual std::vector<ui::menu_item> get_slider_list() override { return {}; };
 
-    virtual osd_font::ptr font_alloc() override
-    {
-        if (m_fontModule == nullptr)
-        {
-            m_fontModule = std::make_unique<osd_module_manager>();
-            extern const module_type FONT_OSX;
-            extern const module_type FONT_NONE;
-            m_fontModule->register_module(FONT_OSX);
-            m_fontModule->register_module(FONT_NONE);
-            try
-            {
-                m_font = &m_fontModule->select_module<font_module>(*this, options(), OSD_FONT_PROVIDER, "osx");
-            }
-            catch (...)
-            {
-                // Fall back to the compiled-in bitmap font rather than crash.
-                m_font = nullptr;
-            }
-        }
-        return m_font ? m_font->font_alloc() : nullptr;
-    };
+    virtual osd_font::ptr font_alloc() override { return std::make_unique<VstOsdFont>(); };
     virtual bool get_font_families(std::string const &font_path, std::vector<std::pair<std::string, std::string> > &result) override { return false; };
     virtual bool execute_command(const char *command) override { return false; };
 
