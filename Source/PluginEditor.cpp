@@ -562,7 +562,13 @@ bool EnsoniqSD1AudioProcessorEditor::isLatchableButton (int idx) const
 {
     if (idx < 0 || idx >= static_cast<int> (audioProcessor.rz1Buttons.size()))
         return false;
-    return audioProcessor.rz1Buttons[static_cast<size_t> (idx)].paramID == "btn_sampling";
+    const auto& id = audioProcessor.rz1Buttons[static_cast<size_t> (idx)].paramID;
+    // Latchable keys stay held after a click so a single mouse can perform
+    // two-key combos: SAMPLING + SAMPLE 1-4 (sampling standby), MUTE or
+    // ACCENT + a drum pad (mute/accent while playing or recording), and
+    // DELETE + a drum pad (delete that note on the current step).
+    return id == "btn_sampling" || id == "btn_accent" || id == "btn_mute"
+        || id == "btn_delete";
 }
 
 void EnsoniqSD1AudioProcessorEditor::pressButton (int idx)
