@@ -9,6 +9,10 @@ the 10 drum voices are summed into the stereo output.
 This repo was carved out of the original Ensoniq SD-1 adaptation project; only
 what is needed to build the two plugin formats is kept.
 
+## Screenshot
+
+<img src="RZ1screenshot.png" alt="Casio RZ-1 plugin panel" width="800"/>
+
 ## Status
 
 - VST3 works in Element (panel, buttons, MIDI, LCD refresh, pattern
