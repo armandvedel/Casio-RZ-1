@@ -1514,13 +1514,19 @@ public:
             ? m_inputBlockStartDaw + static_cast<int64_t>(inputStreamPos - m_inputBlockStartSource)
             : -1;
 
+        // SAMPLING LEVEL fader: scales the DAW input before it reaches the
+        // mic stream (the firmware's own level pot read path is not emulated,
+        // so the gain is applied at the source). Loaded once per callback to
+        // keep the block consistent.
+        const float inputGain = processor->samplingLevelFader.load (std::memory_order_relaxed);
+
         for (int i = 0; i < samples_this_frame; ++i)
         {
-            int16_t v = 0;
+            float v = 0.0f;
             const int64_t daw = dawStart + i;
             if (daw >= 0 && static_cast<uint64_t>(daw) < writeEnd)
-                v = static_cast<int16_t>(processor->inputRing[static_cast<uint64_t>(daw) & (EnsoniqSD1AudioProcessor::INPUT_RING_SIZE - 1)] * 32767.0f);
-            buffer[i] = v;
+                v = processor->inputRing[static_cast<uint64_t>(daw) & (EnsoniqSD1AudioProcessor::INPUT_RING_SIZE - 1)] * inputGain;
+            buffer[i] = static_cast<int16_t> (juce::jlimit (-1.0f, 1.0f, v) * 32767.0f);
         }
         inputStreamPos += samples_this_frame;
 
