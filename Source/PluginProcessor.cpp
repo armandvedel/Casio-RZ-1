@@ -690,6 +690,8 @@ private:
     double inputStreamPos = 0.0;   // next source-rate sample index to fill
     double inputOffset = 0.0;      // dawSample = inputStreamPos + inputOffset
     bool inputOffsetValid = false;
+    double m_lastSrcDiagWall = -2.0;   // sampling-input diagnostics (~1/s)
+    int m_srcDiagCount = 0;
 
     // --- BOOT DIAGNOSTIC ---
     std::chrono::steady_clock::time_point m_wallStart = std::chrono::steady_clock::now();
@@ -1490,7 +1492,23 @@ public:
         }
 
         const uint64_t writeEnd = processor->inputWritePos.load(std::memory_order_acquire);
-        const int64_t dawStart = static_cast<int64_t>(inputStreamPos + inputOffset);
+
+        // MAME runs ahead of the DAW read position by (totalWritten - totalRead)
+        // samples: the audio throttle keeps the output ring ~threshold samples
+        // ahead, and MIDI/clock targets add the same offset so events land at
+        // deterministic DAW positions. The anchor mapping above therefore yields
+        // the DAW position where MAME's output will be HEARD, which is still in
+        // the future from the audio thread's perspective. The input ring only
+        // contains DAW samples that have already been processed, so feed the mic
+        // from the DAW position MAME is at minus that ahead offset (i.e. the
+        // DAW position currently being consumed). Without this, the read is
+        // always beyond writeEnd, the gate below rejects every sample, and the
+        // RZ-1 sits in sampling standby forever ("never gets to SAMPLE OK!").
+        const uint64_t wPos = processor->getTotalWritten();
+        const uint64_t rPos = processor->getTotalRead();
+        const int64_t ahead = (wPos > rPos) ? static_cast<int64_t>(wPos - rPos) : 0;
+        const int64_t dawStart = static_cast<int64_t>(inputStreamPos + inputOffset) - ahead;
+
         for (int i = 0; i < samples_this_frame; ++i)
         {
             int16_t v = 0;
@@ -1500,6 +1518,37 @@ public:
             buffer[i] = v;
         }
         inputStreamPos += samples_this_frame;
+
+        // Boot-log diagnostics (first ~60 s, ~1/s): prove whether DAW audio is
+        // reaching the mic source and whether the ring read lands inside the
+        // written frontier. nz/max > 0 means input is flowing; daw >= wEnd means
+        // the read is still ahead of the audio thread (silence expected).
+        const double wallNow = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - m_wallStart).count();
+        if (m_srcDiagCount < 60 && wallNow - m_lastSrcDiagWall >= 1.0)
+        {
+            m_lastSrcDiagWall = wallNow;
+            m_srcDiagCount++;
+            int nz = 0, maxAbs = 0;
+            for (int i = 0; i < samples_this_frame; ++i)
+            {
+                const int16_t v = buffer[i];
+                if (v != 0)
+                {
+                    ++nz;
+                    const int a = (v < 0) ? -v : v;
+                    if (a > maxAbs) maxAbs = a;
+                }
+            }
+            const double mt = (mame_machine != nullptr) ? mame_machine->time().as_double() : -1.0;
+            processor->appendBootLog("src t=" + juce::String(mt, 3)
+                + " n=" + juce::String(samples_this_frame)
+                + " ahead=" + juce::String(ahead)
+                + " daw=" + juce::String(dawStart)
+                + " wEnd=" + juce::String(processor->inputWritePos.load(std::memory_order_relaxed))
+                + " nz=" + juce::String(nz)
+                + " max=" + juce::String(maxAbs));
+        }
     }
     virtual void sound_stream_set_volumes(uint32_t id, const std::vector<float> &db) override {};
     virtual void sound_begin_update() override {};
