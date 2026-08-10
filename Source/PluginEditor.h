@@ -50,6 +50,10 @@ private:
     bool isLatchableButton (int idx) const;
     void pressButton (int idx);
     void releaseButton (int idx);
+    void unlatchButton (int idx);
+    bool isSamplingLatched() const;
+    bool isSampleKey (int idx) const;
+    int samplingButtonIndex() const;
 
     // Buttons currently held by the mouse gesture (released on mouse up).
     std::vector<int> heldButtons;
@@ -57,6 +61,13 @@ private:
     // Buttons latched by a click (toggle-hold), kept pressed until clicked
     // again. SAMPLING/MUTE/ACCENT/DELETE are latchable for their combos.
     std::vector<int> latchedButtons;
+
+    // The RZ-1 firmware starts the capture when SAMPLING is released. With
+    // SAMPLING latched, a SAMPLE-key click defers an automatic release so the
+    // sampling completes without needing a drag gesture (the tick countdown
+    // resets on each SAMPLE-key click, which also lets linked banks work).
+    bool samplingAutoReleasePending = false;
+    int samplingAutoReleaseTicks = 0;
 
     // Fader values (0..1, default full) and which fader is being dragged.
     // 0-9 instruments, 10 sampling level (visual only), 11 overall volume.

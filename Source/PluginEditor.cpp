@@ -457,6 +457,14 @@ void EnsoniqSD1AudioProcessorEditor::resized()
 
 void EnsoniqSD1AudioProcessorEditor::timerCallback()
 {
+    if (samplingAutoReleasePending && --samplingAutoReleaseTicks <= 0)
+    {
+        samplingAutoReleasePending = false;
+        const int sIdx = samplingButtonIndex();
+        if (sIdx >= 0 && isButtonHeld (sIdx))
+            unlatchButton (sIdx);
+    }
+
     if (!sizeSettled)
     {
         const juce::uint32 now = juce::Time::getMillisecondCounter();
@@ -590,6 +598,38 @@ void EnsoniqSD1AudioProcessorEditor::releaseButton (int idx)
         heldButtons.erase (it);
 }
 
+void EnsoniqSD1AudioProcessorEditor::unlatchButton (int idx)
+{
+    const auto latchedIt = std::find (latchedButtons.begin(), latchedButtons.end(), idx);
+    if (latchedIt != latchedButtons.end())
+        latchedButtons.erase (latchedIt);
+    releaseButton (idx);
+}
+
+int EnsoniqSD1AudioProcessorEditor::samplingButtonIndex() const
+{
+    for (size_t i = 0; i < audioProcessor.rz1Buttons.size(); ++i)
+        if (audioProcessor.rz1Buttons[i].paramID == "btn_sampling")
+            return static_cast<int> (i);
+    return -1;
+}
+
+bool EnsoniqSD1AudioProcessorEditor::isSamplingLatched() const
+{
+    const int sIdx = samplingButtonIndex();
+    return sIdx >= 0
+        && std::find (latchedButtons.begin(), latchedButtons.end(), sIdx) != latchedButtons.end();
+}
+
+bool EnsoniqSD1AudioProcessorEditor::isSampleKey (int idx) const
+{
+    if (idx < 0 || idx >= static_cast<int> (audioProcessor.rz1Buttons.size()))
+        return false;
+    const auto& id = audioProcessor.rz1Buttons[static_cast<size_t> (idx)].paramID;
+    return id == "btn_sample1" || id == "btn_sample2"
+        || id == "btn_sample3" || id == "btn_sample4";
+}
+
 void EnsoniqSD1AudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 {
     const juce::Point<float> lp = layoutFromEditor (e.getPosition());
@@ -639,11 +679,14 @@ void EnsoniqSD1AudioProcessorEditor::mouseUp (const juce::MouseEvent& e)
         const auto latchedIt = std::find (latchedButtons.begin(), latchedButtons.end(), idx);
         if (latchedIt != latchedButtons.end())
         {
-            latchedButtons.erase (latchedIt);
-            releaseButton (idx);
+            if (idx == samplingButtonIndex())
+                samplingAutoReleasePending = false;   // manual un-latch wins
+            unlatchButton (idx);
         }
         else
         {
+            if (idx == samplingButtonIndex())
+                samplingAutoReleasePending = false;
             latchedButtons.push_back (idx);
             const auto heldIt = std::find (heldButtons.begin(), heldButtons.end(), idx);
             if (heldIt != heldButtons.end())
@@ -657,4 +700,13 @@ void EnsoniqSD1AudioProcessorEditor::mouseUp (const juce::MouseEvent& e)
         if (std::find (latchedButtons.begin(), latchedButtons.end(), h) == latchedButtons.end())
             releaseButton (h);
     heldButtons.clear();
+
+    // SAMPLING latched + SAMPLE-key click: defer SAMPLING's release so the
+    // firmware's capture edge fires without a drag. Reset the countdown on
+    // every SAMPLE-key click (covers linked SAMPLE 1+2 / 3+4 banks).
+    if (isSamplingLatched() && isSampleKey (idx))
+    {
+        samplingAutoReleasePending = true;
+        samplingAutoReleaseTicks = 10;   // ~330 ms after the last click
+    }
 }
