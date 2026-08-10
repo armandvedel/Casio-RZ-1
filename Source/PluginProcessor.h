@@ -74,6 +74,10 @@ public:
         std::atomic<float> instrumentLevel[10];
         // Overall output volume fader (0..1, default full).
         std::atomic<float> masterVolume{ 1.0f };
+        // SAMPLING LEVEL fader (0..1, default full). Visual-only mirror: the
+        // firmware's level pot isn't emulated, but the UI position is
+        // persisted like the other faders.
+        std::atomic<float> samplingLevelFader{ 1.0f };
 
         // MAME callback function triggered whenever a hardware output changes
         static void mameOutputNotifier(const char *outname, s32 value, void *param);

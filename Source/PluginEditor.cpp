@@ -277,6 +277,14 @@ EnsoniqSD1AudioProcessorEditor::EnsoniqSD1AudioProcessorEditor (EnsoniqSD1AudioP
     w = juce::roundToInt (h * 800.0f / 535.0f);
     setSize (w, h);
 
+    // Restore fader positions from the processor's atomics, which survive
+    // editor close/reopen within the same plugin instance (they are only
+    // reset when the processor itself is (re)created).
+    for (int i = 0; i < 10; ++i)
+        faderValues[i] = audioProcessor.instrumentLevel[i].load (std::memory_order_relaxed);
+    faderValues[10] = audioProcessor.samplingLevelFader.load (std::memory_order_relaxed);
+    faderValues[11] = audioProcessor.masterVolume.load (std::memory_order_relaxed);
+
     editorBirthTime = juce::Time::getMillisecondCounter();
     startTimerHz (30);
     audioProcessor.nativePanel.store (true, std::memory_order_release);
@@ -457,6 +465,16 @@ void EnsoniqSD1AudioProcessorEditor::resized()
 
 void EnsoniqSD1AudioProcessorEditor::timerCallback()
 {
+    // Keep the panel in sync with the processor's fader values. The processor
+    // is the long-lived owner: DAW state restores (setStateInformation) write
+    // the atomics even while the window is open, and a freshly recreated
+    // editor starts from the atomics via the constructor. During a drag the
+    // values match anyway, since the drag writes both sides together.
+    for (int i = 0; i < 10; ++i)
+        faderValues[i] = audioProcessor.instrumentLevel[i].load (std::memory_order_relaxed);
+    faderValues[10] = audioProcessor.samplingLevelFader.load (std::memory_order_relaxed);
+    faderValues[11] = audioProcessor.masterVolume.load (std::memory_order_relaxed);
+
     if (samplingAutoReleasePending && --samplingAutoReleaseTicks <= 0)
     {
         samplingAutoReleasePending = false;
@@ -553,9 +571,10 @@ void EnsoniqSD1AudioProcessorEditor::setFaderFromY (int idx, float layoutY)
     faderValues[idx] = v;
     if (idx >= 0 && idx < 10)
         audioProcessor.instrumentLevel[idx].store (v, std::memory_order_relaxed);
+    else if (idx == 10)
+        audioProcessor.samplingLevelFader.store (v, std::memory_order_relaxed);
     else if (idx == 11)
         audioProcessor.masterVolume.store (v, std::memory_order_relaxed);
-    // idx 10 (sampling level) is visual only — the emulation has no sampling input.
     repaint();
 }
 

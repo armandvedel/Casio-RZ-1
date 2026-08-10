@@ -3108,7 +3108,15 @@ void EnsoniqSD1AudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         }
     
     // --- 4.5 FLUSH ACTIVE UI STATE ---
-
+    // Fader positions live in the processor (atomics) so they survive editor
+    // close/reopen; embedding them here makes them survive project/preset
+    // reloads too. Defaults on load are 1.0 (full), so old presets are
+    // unaffected.
+    for (int i = 0; i < 10; ++i)
+        xml->setAttribute ("fader_" + juce::String (i),
+                           juce::String (instrumentLevel[i].load (std::memory_order_relaxed)));
+    xml->setAttribute ("fader_sampling", juce::String (samplingLevelFader.load (std::memory_order_relaxed)));
+    xml->setAttribute ("fader_master", juce::String (masterVolume.load (std::memory_order_relaxed)));
     
     // --- 5. SAVE FILE MANAGER STATE ---
     {
@@ -3155,6 +3163,18 @@ void EnsoniqSD1AudioProcessor::setStateInformation (const void* data, int sizeIn
             savedWindowWidth = uiW;
             savedWindowHeight = uiH;
         }
+
+        // --- 2.5 RESTORE FADER POSITIONS ---
+        // Applied to the processor atomics (not just the editor), so the audio
+        // path and any later editor construction both see the saved levels.
+        for (int i = 0; i < 10; ++i)
+            instrumentLevel[i].store (static_cast<float> (xmlState->getDoubleAttribute (
+                                          "fader_" + juce::String (i), 1.0)),
+                                      std::memory_order_relaxed);
+        samplingLevelFader.store (static_cast<float> (xmlState->getDoubleAttribute ("fader_sampling", 1.0)),
+                                  std::memory_order_relaxed);
+        masterVolume.store (static_cast<float> (xmlState->getDoubleAttribute ("fader_master", 1.0)),
+                            std::memory_order_relaxed);
 
         // =================================================================
         // RAM EXTRACTION & MEDIA PATH RESTORATION
