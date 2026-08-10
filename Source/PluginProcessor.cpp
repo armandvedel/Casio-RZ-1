@@ -688,8 +688,10 @@ private:
 
     // --- SAMPLING INPUT FEED (MAME-thread state) ---
     double inputStreamPos = 0.0;   // next source-rate sample index to fill
-    double inputOffset = 0.0;      // dawSample = inputStreamPos + inputOffset
-    bool inputOffsetValid = false;
+    uint64_t m_lastInputWriteEnd = 0;   // last observed inputWritePos
+    int64_t m_inputBlockStartDaw = 0;   // DAW pos of the block currently read
+    double m_inputBlockStartSource = 0.0; // source pos when that block arrived
+    bool m_inputBlockMapped = false;
     double m_lastSrcDiagWall = -2.0;   // sampling-input diagnostics (~1/s)
     int m_srcDiagCount = 0;
 
@@ -1472,42 +1474,39 @@ public:
             return;
         }
 
-        const double tAnchor = processor->getAnchorMameTime();
-        const uint64_t sAnchor = processor->getAnchorDawSample();
-        const double sr = processor->getHostSampleRate();
-        const double offset = static_cast<double>(sAnchor) - tAnchor * sr;
-
-        // Keep the running position continuous across re-anchors: source sample k
-        // maps to DAW sample k + offset, so when the anchor moves we shift k by
-        // the offset delta rather than letting the timeline jump.
-        if (!inputOffsetValid)
-        {
-            inputOffset = offset;
-            inputOffsetValid = true;
-        }
-        else if (offset != inputOffset)
-        {
-            inputStreamPos += inputOffset - offset;
-            inputOffset = offset;
-        }
-
+        // The audio thread publishes the ring frontier AND the start of the
+        // block it just wrote (inputBlockStart < inputWritePos, stored with
+        // release ordering so the pair stays consistent). The DAW position the
+        // audio thread is currently consuming is the block START - the
+        // frontier is the position it is about to process, which has no data
+        // written yet. Reading at the frontier (the previous "ahead" math
+        // collapsed to exactly that) always lands one sample past the last
+        // written sample, so the gate below rejected everything and the mic
+        // stayed silent forever. Anchor the read to the block start and
+        // advance with our own source position: that stays inside the written
+        // region continuously, at the cost of the inherent input delay (the
+        // read lags the frontier by the block size).
         const uint64_t writeEnd = processor->inputWritePos.load(std::memory_order_acquire);
+        if (writeEnd != m_lastInputWriteEnd)
+        {
+            if (writeEnd > m_lastInputWriteEnd || !m_inputBlockMapped)
+            {
+                m_inputBlockStartDaw = static_cast<int64_t>(processor->getInputBlockStart());
+                m_inputBlockStartSource = inputStreamPos;
+                m_inputBlockMapped = true;
+            }
+            else
+            {
+                // Ring was reset/rewound (prepareToPlay / transport reset):
+                // stay silent until it advances again.
+                m_inputBlockMapped = false;
+            }
+            m_lastInputWriteEnd = writeEnd;
+        }
 
-        // MAME runs ahead of the DAW read position by (totalWritten - totalRead)
-        // samples: the audio throttle keeps the output ring ~threshold samples
-        // ahead, and MIDI/clock targets add the same offset so events land at
-        // deterministic DAW positions. The anchor mapping above therefore yields
-        // the DAW position where MAME's output will be HEARD, which is still in
-        // the future from the audio thread's perspective. The input ring only
-        // contains DAW samples that have already been processed, so feed the mic
-        // from the DAW position MAME is at minus that ahead offset (i.e. the
-        // DAW position currently being consumed). Without this, the read is
-        // always beyond writeEnd, the gate below rejects every sample, and the
-        // RZ-1 sits in sampling standby forever ("never gets to SAMPLE OK!").
-        const uint64_t wPos = processor->getTotalWritten();
-        const uint64_t rPos = processor->getTotalRead();
-        const int64_t ahead = (wPos > rPos) ? static_cast<int64_t>(wPos - rPos) : 0;
-        const int64_t dawStart = static_cast<int64_t>(inputStreamPos + inputOffset) - ahead;
+        const int64_t dawStart = m_inputBlockMapped
+            ? m_inputBlockStartDaw + static_cast<int64_t>(inputStreamPos - m_inputBlockStartSource)
+            : -1;
 
         for (int i = 0; i < samples_this_frame; ++i)
         {
@@ -1521,8 +1520,8 @@ public:
 
         // Boot-log diagnostics (first ~60 s, ~1/s): prove whether DAW audio is
         // reaching the mic source and whether the ring read lands inside the
-        // written frontier. nz/max > 0 means input is flowing; daw >= wEnd means
-        // the read is still ahead of the audio thread (silence expected).
+        // written region. nz/max > 0 means input is flowing; daw >= wEnd means
+        // the read is outside the written block (silence expected).
         const double wallNow = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - m_wallStart).count();
         if (m_srcDiagCount < 60 && wallNow - m_lastSrcDiagWall >= 1.0)
@@ -1541,11 +1540,17 @@ public:
                 }
             }
             const double mt = (mame_machine != nullptr) ? mame_machine->time().as_double() : -1.0;
+            const uint64_t wPos = processor->getTotalWritten();
+            const uint64_t rPos = processor->getTotalRead();
+            const int64_t ahead = (wPos > rPos) ? static_cast<int64_t>(wPos - rPos) : 0;
             processor->appendBootLog("src t=" + juce::String(mt, 3)
                 + " n=" + juce::String(samples_this_frame)
                 + " ahead=" + juce::String(ahead)
                 + " daw=" + juce::String(dawStart)
                 + " wEnd=" + juce::String(processor->inputWritePos.load(std::memory_order_relaxed))
+                + " bsz=" + juce::String(m_inputBlockMapped
+                    ? (static_cast<int64_t>(writeEnd) - m_inputBlockStartDaw)
+                    : -1)
                 + " nz=" + juce::String(nz)
                 + " max=" + juce::String(maxAbs));
         }
@@ -2061,6 +2066,8 @@ void EnsoniqSD1AudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
             
         midiReadPos.store(0, std::memory_order_release);
         midiWritePos.store(0, std::memory_order_release);
+        inputBlockStart.store(0, std::memory_order_relaxed);
+        inputWritePos.store(0, std::memory_order_release);
     
 #if JucePlugin_Build_AU
     pendingAUMidi.clear();
@@ -2247,6 +2254,7 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                         v = 0.5f * (v + inR[i]);
                     inputRing[(currentReadPos + static_cast<uint64_t>(i)) & (INPUT_RING_SIZE - 1)] = v;
                 }
+                inputBlockStart.store(currentReadPos, std::memory_order_relaxed);
                 inputWritePos.store(currentReadPos + static_cast<uint64_t>(numSamples), std::memory_order_release);
             }
         }

@@ -349,11 +349,17 @@ public:
     // (same t_anchor/s_anchor atomics the MIDI scheduler uses).
     static constexpr int INPUT_RING_SIZE = 65536;
     float inputRing[INPUT_RING_SIZE] = { 0.0f };
+    // inputWritePos is the end (frontier) of the block just written;
+    // inputBlockStart is its start (currentReadPos at capture time). The OSD
+    // reads forward from inputBlockStart, which stays inside the written
+    // region - reading at the frontier itself always misses by one block.
     std::atomic<uint64_t> inputWritePos{ 0 };
+    std::atomic<uint64_t> inputBlockStart{ 0 };
 
     double getAnchorMameTime() const { return anchorMameTime.load(std::memory_order_relaxed); }
     uint64_t getAnchorDawSample() const { return anchorDawSample.load(std::memory_order_relaxed); }
     bool isAnchorPending() const { return needAnchorSync.load(std::memory_order_acquire); }
+    uint64_t getInputBlockStart() const { return inputBlockStart.load(std::memory_order_relaxed); }
 
     // Direct boot-stage diagnostics (appended to mame_boot_log.txt regardless
     // of whether MAME's OSD update ever runs, so a stalled boot is traceable).
