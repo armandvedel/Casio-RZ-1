@@ -522,14 +522,19 @@ private:
 
     // Audio Ring Buffers (Generously sized to prevent underruns)
     static constexpr int RING_BUFFER_SIZE = 65536;
+    // One output bus per RZ-1 drum voice (MAME channel order, see
+    // pushAudioFromMame): tom1, tom2, tom3, bd, rim_and_sd, hihat,
+    // claps_and_ride, cowbell_and_crash, sample_1_and_2, sample_3_and_4.
+    static constexpr int RZ1_DRUM_CHANNELS = 10;
 
     // --- MAIN OUT BUFFERS ---
     float ringBufferL[RING_BUFFER_SIZE] = { 0.0f };
     float ringBufferR[RING_BUFFER_SIZE] = { 0.0f };
 
-    // --- AUX OUT BUFFERS ---
-    float ringBufferAuxL[RING_BUFFER_SIZE] = { 0.0f };
-    float ringBufferAuxR[RING_BUFFER_SIZE] = { 0.0f };
+    // --- PER-INSTRUMENT BUFFERS (one per drum voice; fader gain applied,
+    // master volume not - the panel faders shape the Main mix and the
+    // individual outputs alike, the master only affects Main) ---
+    float instRing[RZ1_DRUM_CHANNELS][RING_BUFFER_SIZE] = { { 0.0f } };
 
     std::atomic<uint64_t> totalWritten{ 0 };
 

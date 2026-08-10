@@ -23,6 +23,39 @@ what is needed to build the two plugin formats is kept.
   sibling SD-1 AU) with "didn't find the component" even though the system
   AudioComponent registry instantiates it fine - treat Logic as the validator.
 
+## Multi-output routing
+
+Every RZ-1 drum voice has its own stereo output bus in addition to the
+Main mix:
+
+| Bus | Content |
+|---|---|
+| Main Out | Full mix (panel faders + master volume, 1/8 headroom) |
+| Tom 1 / Tom 2 / Tom 3 | Individual toms |
+| Bass Drum | BD |
+| Rim & Snare | Rim shot / snare voice |
+| Hi-Hat | Hi-hat voice |
+| Claps & Ride | Claps / ride voice |
+| Cowbell & Crash | Cowbell / crash voice |
+| Sample 1 & 2 | Sample pads 1+2 (shared PCM voice on the real hardware) |
+| Sample 3 & 4 | Sample pads 3+4 (shared PCM voice on the real hardware) |
+
+The per-instrument buses carry the dry voice with its panel fader gain applied
+(the master volume only affects Main Out), so you can mix the drums on
+separate DAW tracks. SAMPLE 1/2 and 3/4 each share one bus because the real
+RZ-1 mixes each pair onto a single PCM channel - the emulation can't separate
+them any further.
+
+Host notes:
+
+- **Logic**: load **Casio RZ-1** as an AU MIDI-Controlled Effect on a software
+  instrument track. The AU exposes all 11 output buses (verified via the
+  AudioComponent registry: 11 output elements + 1 input). In the mixer, click
+  the "+" button on the channel strip repeatedly to reveal aux channels for
+  outputs 3-4, 5-6, ..., 21-22, and route each drum to its own track. The
+  sampling input appears as the plugin's Side Chain menu.
+- **Element / VST3 hosts**: all 11 buses are active out of the box.
+
 ## MIDI timing
 
 MIDI timing is subject to the emulated device, not just the plugin. The

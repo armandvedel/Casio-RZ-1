@@ -155,10 +155,11 @@ void EnsoniqSD1AudioProcessor::pushAudioFromMame(const int16_t* pcmBuffer, int n
     //   0  tom1, 1 tom2, 2 tom3, 3 bd, 4 rim_and_sd, 5 hihat,
     //   6  claps_and_ride, 7 cowbell_and_crash, 8 sample_1_and_2,
     //   9  sample_3_and_4, 10 speaker (cassette/line-in - dropped from mix)
-    // All 10 drum voices are mono front_center; sum them into a mono L/R mix.
-    // 1/8 headroom allows up to 8 simultaneous full-scale voices before clipping.
+    // All 10 drum voices are mono front_center. Each voice also gets its own
+    // ring (instRing) for the per-instrument output buses; the Main mix sums
+    // them with 1/8 headroom (allows up to 8 simultaneous full-scale voices
+    // before clipping) and the master volume.
     constexpr int RZ1_STRIDE = 11;
-    constexpr int RZ1_DRUM_CHANNELS = 10;
     constexpr float RZ1_MIX_SCALE = 1.0f / 8.0f;
 
     // Per-instrument fader gains (UI thread writes, this thread reads).
@@ -168,20 +169,21 @@ void EnsoniqSD1AudioProcessor::pushAudioFromMame(const int16_t* pcmBuffer, int n
 
     for (int i = 0; i < numSamples; ++i) {
         const int16_t* frame = pcmBuffer + (i * RZ1_STRIDE);
+        const int index = currentWritePos & (RING_BUFFER_SIZE - 1);
 
         float mix = 0.0f;
         for (int ch = 0; ch < RZ1_DRUM_CHANNELS; ++ch)
-            mix += (frame[ch] / 32768.0f) * faderGain[ch];
+        {
+            const float voice = (frame[ch] / 32768.0f) * faderGain[ch];
+            instRing[ch][index] = voice;   // per-instrument bus (no master)
+            mix += voice;
+        }
 
         mix *= RZ1_MIX_SCALE * masterVolume.load(std::memory_order_relaxed);
         mix = (mix > 1.0f) ? 1.0f : ((mix < -1.0f) ? -1.0f : mix);
 
-        int index = currentWritePos & (RING_BUFFER_SIZE - 1);
-
         ringBufferL[index] = mix;
         ringBufferR[index] = mix;
-        ringBufferAuxL[index] = mix;
-        ringBufferAuxR[index] = mix;
 
         currentWritePos++;
     }
@@ -1794,7 +1796,16 @@ EnsoniqSD1AudioProcessor::EnsoniqSD1AudioProcessor()
      : AudioProcessor (BusesProperties()
                        .withInput  ("Audio In", juce::AudioChannelSet::stereo(), true)
                        .withOutput ("Main Out", juce::AudioChannelSet::stereo(), true)
-                       .withOutput ("Aux Out",  juce::AudioChannelSet::stereo(), false)
+                       .withOutput ("Tom 1",          juce::AudioChannelSet::stereo(), true)
+                       .withOutput ("Tom 2",          juce::AudioChannelSet::stereo(), true)
+                       .withOutput ("Tom 3",          juce::AudioChannelSet::stereo(), true)
+                       .withOutput ("Bass Drum",      juce::AudioChannelSet::stereo(), true)
+                       .withOutput ("Rim & Snare",    juce::AudioChannelSet::stereo(), true)
+                       .withOutput ("Hi-Hat",         juce::AudioChannelSet::stereo(), true)
+                       .withOutput ("Claps & Ride",   juce::AudioChannelSet::stereo(), true)
+                       .withOutput ("Cowbell & Crash", juce::AudioChannelSet::stereo(), true)
+                       .withOutput ("Sample 1 & 2",   juce::AudioChannelSet::stereo(), true)
+                       .withOutput ("Sample 3 & 4",   juce::AudioChannelSet::stereo(), true)
                        ),
        apvts(*this, nullptr, "Parameters", createParameterLayout())
 {
@@ -2077,8 +2088,8 @@ void EnsoniqSD1AudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
         for (int i = 0; i < RING_BUFFER_SIZE; ++i) {
             ringBufferL[i] = 0.0f;
             ringBufferR[i] = 0.0f;
-            ringBufferAuxL[i] = 0.0f;
-            ringBufferAuxR[i] = 0.0f;
+            for (int ch = 0; ch < RZ1_DRUM_CHANNELS; ++ch)
+                instRing[ch][i] = 0.0f;
         }
     
                 // NEW: AU Flag that prepareToPlay just finished
@@ -2109,10 +2120,14 @@ bool EnsoniqSD1AudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
             return false;
     }
 
-    // 3. Aux Out must be stereo ONLY IF the user explicitly enables it in the DAW
-    auto auxBus = layouts.getChannelSet(false, 1);
-    if (auxBus != juce::AudioChannelSet::disabled() && auxBus != juce::AudioChannelSet::stereo())
-        return false;
+    // 3. Instrument buses may be stereo or disabled (hosts can turn off the
+    // ones they don't route).
+    for (int b = 1; b < layouts.outputBuses.size(); ++b)
+    {
+        auto bus = layouts.getChannelSet(false, b);
+        if (bus != juce::AudioChannelSet::disabled() && bus != juce::AudioChannelSet::stereo())
+            return false;
+    }
 
     return true;
 }
@@ -2284,7 +2299,8 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
             maxOfflineBuffer.store(mameBufferThreshold.load(std::memory_order_relaxed), std::memory_order_relaxed);
             for (int j = 0; j < RING_BUFFER_SIZE; ++j) {
                 ringBufferL[j] = 0.0f; ringBufferR[j] = 0.0f;
-                ringBufferAuxL[j] = 0.0f; ringBufferAuxR[j] = 0.0f;
+                for (int ch = 0; ch < RZ1_DRUM_CHANNELS; ++ch)
+                    instRing[ch][j] = 0.0f;
             }
             midiReadPos.store(midiWritePos.load(std::memory_order_acquire), std::memory_order_release);
         }
@@ -2780,12 +2796,20 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         // AU wrapper compacts to max(inputs, outputs) — e.g. with 2 in / 4 out
         // the input shares channels 0/1 with Main Out). getBusBuffer resolves
         // the correct channels for every wrapper/host combination.
-        auto mainOut = getBusBuffer(buffer, false, 0);
-        auto auxOut  = getBusBuffer(buffer, false, 1);
-        auto* outL    = mainOut.getNumChannels() > 0 ? mainOut.getWritePointer(0) : nullptr;
-        auto* outR    = mainOut.getNumChannels() > 1 ? mainOut.getWritePointer(1) : nullptr;
-        auto* outAuxL = auxOut.getNumChannels() > 0 ? auxOut.getWritePointer(0) : nullptr;
-        auto* outAuxR = auxOut.getNumChannels() > 1 ? auxOut.getWritePointer(1) : nullptr;
+        // Instrument buses follow Main: bus b (b >= 1) carries drum voice b-1.
+        const int numOutBuses = juce::jmin(getBusCount(false), RZ1_DRUM_CHANNELS + 1);
+        float* outPtrs[RZ1_DRUM_CHANNELS + 1][2] = {};
+        int outChans[RZ1_DRUM_CHANNELS + 1] = {};
+        for (int b = 0; b < numOutBuses; ++b)
+        {
+            auto bus = getBusBuffer(buffer, false, b);
+            outChans[b] = juce::jmin(bus.getNumChannels(), 2);
+            for (int c = 0; c < outChans[b]; ++c)
+                outPtrs[b][c] = bus.getWritePointer(c);
+        }
+        // Main L/R aliases used later (anti-smart-disable Nyquist noise).
+        float* outL = outPtrs[0][0];
+        float* outR = outPtrs[0][1];
         
         // Consume samples from the ring buffers
         for (int i = 0; i < samplesToProcess; ++i) {
@@ -2794,11 +2818,14 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
             // Bitwise AND (&) wrap-around instead of modulo (%)
             uint64_t idx = currentReadPos & (RING_BUFFER_SIZE - 1);
             
-            // 4. PROTECTION: Even Main L/R must be checked against nullptr to be 100% crash-proof
-            if (outL != nullptr)    outL[i]    = ringBufferL[idx];
-            if (outR != nullptr)    outR[i]    = ringBufferR[idx];
-            if (outAuxL != nullptr) outAuxL[i] = ringBufferAuxL[idx];
-            if (outAuxR != nullptr) outAuxR[i] = ringBufferAuxR[idx];
+            const float mainMix = ringBufferL[idx];
+            for (int b = 0; b < numOutBuses; ++b)
+            {
+                const float v = (b == 0) ? mainMix : instRing[b - 1][idx];
+                for (int c = 0; c < outChans[b]; ++c)
+                    if (outPtrs[b][c] != nullptr)
+                        outPtrs[b][c][i] = v;
+            }
             
             currentReadPos++;
         }
@@ -2806,10 +2833,10 @@ void EnsoniqSD1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         // Underrun protection: pad remaining required samples with zeroes
         if (!isNonRealtime() && samplesToProcess < numSamples) {
             for (int i = samplesToProcess; i < numSamples; ++i) {
-                if (outL != nullptr)    outL[i]    = 0.0f;
-                if (outR != nullptr)    outR[i]    = 0.0f;
-                if (outAuxL != nullptr) outAuxL[i] = 0.0f;
-                if (outAuxR != nullptr) outAuxR[i] = 0.0f;
+                for (int b = 0; b < numOutBuses; ++b)
+                    for (int c = 0; c < outChans[b]; ++c)
+                        if (outPtrs[b][c] != nullptr)
+                            outPtrs[b][c][i] = 0.0f;
             }
         }
         
