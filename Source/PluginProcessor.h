@@ -418,9 +418,12 @@ public:
     // Dynamic offline buffer for sync
     std::atomic<int> maxOfflineBuffer{ 1024 };
                 
-        // --- RAM INJECTION BUFFERS ---
-        juce::MemoryBlock pendingOsram;
-        juce::MemoryBlock pendingSeqRam;
+        // --- RAM INJECTION BUFFERS (RZ-1 battery-backed NVRAM) ---
+        // dataram holds patterns/songs/settings; sample1/sample2 hold the
+        // recorded sample RAM. Each is 8 KB, matching the MAME NVRAM files.
+        juce::MemoryBlock pendingDataRam;
+        juce::MemoryBlock pendingSample1Ram;
+        juce::MemoryBlock pendingSample2Ram;
         std::atomic<bool> pendingRamInjection{ false };
     
         // --- BANK INJECTION (60-program bank → osram, no CPU reset) ---

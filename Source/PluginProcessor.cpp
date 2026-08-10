@@ -1028,29 +1028,33 @@ public:
         
         if (processor->pendingRamInjection.exchange(false, std::memory_order_acquire)) {
                     
-                    auto* osram_share = mame_machine->root_device().memshare("osram");
-                    auto* seqram_share = mame_machine->root_device().memshare("seqram");
+                    auto* dataram_share = mame_machine->root_device().memshare("dataram");
+                    auto* sample1_share = mame_machine->root_device().memshare("sample1");
+                    auto* sample2_share = mame_machine->root_device().memshare("sample2");
 
-                    // 1. Inject the OS RAM
-                    if (osram_share != nullptr && processor->pendingOsram.getSize() == osram_share->bytes()) {
-                            std::memcpy(osram_share->ptr(), processor->pendingOsram.getData(), osram_share->bytes());
+                    // 1. Restore the RZ-1's battery-backed data RAM (patterns, songs, settings)
+                    if (dataram_share != nullptr && processor->pendingDataRam.getSize() == dataram_share->bytes()) {
+                            std::memcpy(dataram_share->ptr(), processor->pendingDataRam.getData(), dataram_share->bytes());
                     }
              
-                    // 2. Load the Sequencer RAM
-                    if (seqram_share != nullptr && processor->pendingSeqRam.getSize() == seqram_share->bytes()) {
-                        std::memcpy(seqram_share->ptr(), processor->pendingSeqRam.getData(), seqram_share->bytes());
+                    // 2. Restore the two sample RAM regions (recorded samples)
+                    if (sample1_share != nullptr && processor->pendingSample1Ram.getSize() == sample1_share->bytes()) {
+                        std::memcpy(sample1_share->ptr(), processor->pendingSample1Ram.getData(), sample1_share->bytes());
+                    }
+                    if (sample2_share != nullptr && processor->pendingSample2Ram.getSize() == sample2_share->bytes()) {
+                        std::memcpy(sample2_share->ptr(), processor->pendingSample2Ram.getData(), sample2_share->bytes());
                     }
 
-                    // 3. Reset the CPU so the SD-1 OS re-evaluates the fresh RAM, RESET SYS-EX in memory
+                    // 3. Warm-boot the RZ-1 so the firmware re-reads the restored RAM
                     device_t* cpu = mame_machine->root_device().subdevice("maincpu");
                     if (cpu != nullptr) {
-                            cpu->memory().space(AS_PROGRAM).write_byte(0xFFCE0B, 0x01);
                             cpu->reset();
                     }
 
                     // 4. Free memory
-                    processor->pendingOsram.setSize(0);
-                    processor->pendingSeqRam.setSize(0);
+                    processor->pendingDataRam.setSize(0);
+                    processor->pendingSample1Ram.setSize(0);
+                    processor->pendingSample2Ram.setSize(0);
                     processor->panicDelaySamples.store(static_cast<int>(processor->getHostSampleRate() * 0.5), std::memory_order_release);
                     
                 }
@@ -1901,18 +1905,16 @@ void EnsoniqSD1AudioProcessor::shutdownMame()
                 
                 if (instNvram.exists() && instNvram.isDirectory()) {
                     masterNvram.createDirectory();
-                    juce::File instOsram = instNvram.getChildFile("osram");
-                    juce::File instSeqram = instNvram.getChildFile("seqram");
-                    juce::File destOsram = masterNvram.getChildFile("osram");
-                    juce::File destSeqram = masterNvram.getChildFile("seqram");
-                    
-                    if (instOsram.existsAsFile()) {
-                        destOsram.deleteFile();
-                        instOsram.copyFileTo(destOsram);
-                    }
-                    if (instSeqram.existsAsFile()) {
-                        destSeqram.deleteFile();
-                        instSeqram.copyFileTo(destSeqram);
+                    const char* nvramFiles[] = { "dataram", "sample1", "sample2" };
+                    for (const char* name : nvramFiles)
+                    {
+                        juce::File instFile = instNvram.getChildFile(name);
+                        if (instFile.existsAsFile())
+                        {
+                            juce::File destFile = masterNvram.getChildFile(name);
+                            destFile.deleteFile();
+                            instFile.copyFileTo(destFile);
+                        }
                     }
                 }
                 nvramLock.exit();
@@ -3053,22 +3055,56 @@ void EnsoniqSD1AudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         xml->setAttribute("is_cart_loaded", isCartLoaded.load());
     }
 
-    // --- 4. DIRECT RAM EXTRACTION (Version Independent) ---
-        if (isMameRunningFlag() && mameMachine != nullptr) {
-            
-            // Request the memory block pointers directly from MAME
-            auto* osram_share = mameMachine->root_device().memshare("osram");
-            auto* seqram_share = mameMachine->root_device().memshare("seqram");
+    // --- 4. RZ-1 NVRAM EXTRACTION (patterns, songs, samples) ---
+        // The RZ-1 keeps its battery-backed state in three 8 KB regions:
+        // dataram (patterns/songs/settings) plus sample1/sample2 (recorded
+        // samples). Embed them in the preset XML so saved presets recall them.
+        bool nvramSavedFromShares = false;
+        if (isMameRunningFlag() && mameMachine != nullptr)
+        {
+            auto* dataram_share = mameMachine->root_device().memshare("dataram");
+            auto* sample1_share = mameMachine->root_device().memshare("sample1");
+            auto* sample2_share = mameMachine->root_device().memshare("sample2");
 
-            if (osram_share != nullptr) {
-                juce::MemoryBlock osBlock(osram_share->ptr(), osram_share->bytes());
-                xml->setAttribute("ram_osram", osBlock.toBase64Encoding());
+            if (dataram_share != nullptr && sample1_share != nullptr && sample2_share != nullptr)
+            {
+                juce::MemoryBlock dataRamBlock(dataram_share->ptr(), dataram_share->bytes());
+                xml->setAttribute("ram_dataram", dataRamBlock.toBase64Encoding());
+                juce::MemoryBlock sample1Block(sample1_share->ptr(), sample1_share->bytes());
+                xml->setAttribute("ram_sample1", sample1Block.toBase64Encoding());
+                juce::MemoryBlock sample2Block(sample2_share->ptr(), sample2_share->bytes());
+                xml->setAttribute("ram_sample2", sample2Block.toBase64Encoding());
+                nvramSavedFromShares = true;
             }
-            
-            if (seqram_share != nullptr) {
-                juce::MemoryBlock seqBlock(seqram_share->ptr(), seqram_share->bytes());
-                xml->setAttribute("ram_seqram", seqBlock.toBase64Encoding());
-            }
+        }
+
+        // If MAME isn't running at save time, fall back to the NVRAM files it
+        // last wrote (instance sandbox first, then the master copy).
+        if (!nvramSavedFromShares)
+        {
+            auto saveNvramFile = [&](const juce::File& file, const char* xmlAttr)
+            {
+                if (!file.existsAsFile())
+                    return;
+                juce::MemoryBlock block;
+                if (!file.loadFileAsData(block))
+                    return;
+                if (block.getSize() > 0)
+                    xml->setAttribute(xmlAttr, block.toBase64Encoding());
+            };
+
+            juce::File instanceNvram = juce::File(instanceTempDir)
+                                            .getChildFile("nvram").getChildFile("rz1");
+            juce::File masterNvram = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                                            .getChildFile("CasioRZ1").getChildFile("GlobalState")
+                                            .getChildFile("nvram").getChildFile("rz1");
+
+            saveNvramFile(instanceNvram.getChildFile("dataram"), "ram_dataram");
+            saveNvramFile(instanceNvram.getChildFile("sample1"), "ram_sample1");
+            saveNvramFile(instanceNvram.getChildFile("sample2"), "ram_sample2");
+            if (!xml->hasAttribute("ram_dataram")) saveNvramFile(masterNvram.getChildFile("dataram"), "ram_dataram");
+            if (!xml->hasAttribute("ram_sample1")) saveNvramFile(masterNvram.getChildFile("sample1"), "ram_sample1");
+            if (!xml->hasAttribute("ram_sample2")) saveNvramFile(masterNvram.getChildFile("sample2"), "ram_sample2");
         }
     
     // --- 4.5 FLUSH ACTIVE UI STATE ---
@@ -3191,17 +3227,18 @@ void EnsoniqSD1AudioProcessor::setStateInformation (const void* data, int sizeIn
                     juce::String b64String = xmlState->getStringAttribute("mame_state");
 
                     // LEGACY LOAD (v0.9.7)
-                    if (extractLegacyMameState(b64String, pendingOsram, pendingSeqRam)) {
+                    if (extractLegacyMameState(b64String, pendingDataRam, pendingSample1Ram)) {
                         pendingRamInjection.store(true, std::memory_order_release);
                         needsBootPreRoll.store(true, std::memory_order_release);
                         isWarmBoot.store(true, std::memory_order_release); // LOAD STATE FLAG
                     }
                 }
-                else if (xmlState->hasAttribute("ram_osram")) {
+                else if (xmlState->hasAttribute("ram_dataram")) {
                     
-                    // LOAD FROM NEW XML FORMAT
-                    pendingOsram.fromBase64Encoding(xmlState->getStringAttribute("ram_osram"));
-                    pendingSeqRam.fromBase64Encoding(xmlState->getStringAttribute("ram_seqram"));
+                    // LOAD FROM NEW XML FORMAT (RZ-1 NVRAM)
+                    pendingDataRam.fromBase64Encoding(xmlState->getStringAttribute("ram_dataram"));
+                    pendingSample1Ram.fromBase64Encoding(xmlState->getStringAttribute("ram_sample1"));
+                    pendingSample2Ram.fromBase64Encoding(xmlState->getStringAttribute("ram_sample2"));
                     pendingRamInjection.store(true, std::memory_order_release);
                     needsBootPreRoll.store(true, std::memory_order_release);
                     isWarmBoot.store(true, std::memory_order_release); // LOAD STATE FLAG
@@ -3815,11 +3852,13 @@ void EnsoniqSD1AudioProcessor::runMameEngine()
         
         if (masterNvram.exists() && masterNvram.isDirectory()) {
             instNvram.createDirectory();
-            juce::File srcOsram = masterNvram.getChildFile("osram");
-            juce::File srcSeqram = masterNvram.getChildFile("seqram");
-            
-            if (srcOsram.existsAsFile()) srcOsram.copyFileTo(instNvram.getChildFile("osram"));
-            if (srcSeqram.existsAsFile()) srcSeqram.copyFileTo(instNvram.getChildFile("seqram"));
+            const char* nvramFiles[] = { "dataram", "sample1", "sample2" };
+            for (const char* name : nvramFiles)
+            {
+                juce::File srcFile = masterNvram.getChildFile(name);
+                if (srcFile.existsAsFile())
+                    srcFile.copyFileTo(instNvram.getChildFile(name));
+            }
         }
 
         // Assign MAME isolated paths for this instance

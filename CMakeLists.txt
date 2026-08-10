@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Logic skips revalidation of AU components whose version hasn't changed, so
-# the aumu -> aumf switch (1.0.2) and the 11-output-bus layout (1.0.3) were
-# invisible to it until the version moved.
-project(CasioRZ1 VERSION 1.0.3 LANGUAGES C CXX)
+# each user-visible change bumps the version: the aumu -> aumf switch (1.0.2),
+# the 11-output-bus layout (1.0.3), and RZ-1 NVRAM in presets (1.0.4).
+project(CasioRZ1 VERSION 1.0.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
