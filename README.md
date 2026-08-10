@@ -56,6 +56,50 @@ Host notes:
   sampling input appears as the plugin's Side Chain menu.
 - **Element / VST3 hosts**: all 11 buses are active out of the box.
 
+## Panel operations
+
+Keys that need to be held for a combo (SAMPLING, MUTE, ACCENT, DELETE) can be
+**latched**: click once to hold, click again to release. This lets you do
+two-key combos with a single mouse - click the modifier, click the pad, then
+click the modifier again when done (dragging also still works).
+
+### Sampling
+
+1. Click **SAMPLING** to latch it (it stays held).
+2. Click **SAMPLE 1-4** to enter sampling standby (LCD shows `SAMPLING n`).
+3. Route audio into the plugin: in Logic use the plugin's **Side Chain**
+   input; in Element/VST3 enable the **Audio In** bus. The SAMPLING LEVEL
+   fader is visual-only (the emulated pot is not wired), so keep the routed
+   level healthy.
+4. About 1/3 s after the SAMPLE-key click, SAMPLING auto-releases and the
+   capture fires - the sampling LED flashes and the LCD shows `SAMPLE OK!`.
+   You can also click SAMPLING again to un-latch and capture immediately.
+5. Each capture stores 0.2 s. For a 0.4 s linked capture, click **SAMPLE 1
+   + 2** or **SAMPLE 3 + 4** in quick succession (or drag over both while
+   SAMPLING is held) - the auto-release waits for the last click.
+
+### Muting and accenting
+
+Click **MUTE** (quiet hit) or **ACCENT** (loud hit) to latch it, then click
+the instrument/sample pad whose hit you want to affect, then click the
+modifier again to release. This works while recording (writes the
+muted/accented note into the pattern) and during real-time play. The RZ-1 has
+three velocity levels - MUTE ≈ velocity 48, normal ≈ 64/96, ACCENT ≈ 112 -
+so MUTE makes a hit quiet but not silent. A fully silent step is a step you
+simply don't write a note into (a rest).
+
+### Deleting a note
+
+1. Click **EDIT/RECORD** to enter PATTERN RECORD write standby.
+2. Click **VALUE ▲ (YES)** once to enter STEP RECORD.
+3. Use **VALUE ▲/▼ (YES/NO)** to move to the step containing the note.
+4. Click **DELETE** to latch it, then click the instrument/sample pad whose
+   note you want removed from that step. Click DELETE again to release.
+
+Alternative in real time: during REAL TIME RECORD, latch (or hold) DELETE and
+hit the pad in time with the note to delete - only that instrument's notes
+are removed while DELETE is held.
+
 ## MIDI timing
 
 MIDI timing is subject to the emulated device, not just the plugin. The
